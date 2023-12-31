@@ -72,10 +72,11 @@ These are load-bearing. Do not break them without discussion.
   cached for 1 hour on disk (`~/.cache/taken`, overridable with
   `TAKEN_CACHE_DIR`) plus an in-memory layer. `--no-cache` bypasses it.
   A stale cache can hide fresh state; that is documented, not hidden.
-- **Vendored console copies.** `docs/console/py/checks.py` and `docs/console/py/verdict.py`
-  are byte-identical copies of `taken/` for the in-browser Pyodide console.
-  CI fails if they drift. Re-copy after any pipeline change:
-  `cp taken/checks.py docs/console/py/checks.py && cp taken/verdict.py docs/console/py/verdict.py`.
+- **Vendored console copies.** `docs/console/py/checks.py`, `docs/console/py/verdict.py`
+  and `docs/console/py/budget.py` are byte-identical copies of `taken/` for the
+  in-browser Pyodide console. CI fails if they drift. Re-copy after any change to
+  those modules:
+  `cp taken/checks.py docs/console/py/checks.py && cp taken/verdict.py docs/console/py/verdict.py && cp taken/budget.py docs/console/py/budget.py`.
 - **Version strings move together.** `pyproject.toml` and the
   `taken --version` string in `docs/console/py/webshim.py` must match; CI enforces
   this.
