@@ -1,5 +1,6 @@
 """Cache tests: gh_api caches successful responses for an hour."""
 
+import inspect
 import json
 
 import pytest
@@ -156,6 +157,13 @@ def test_clear_cache_flag_empty_cache(cache_env, tmp_path, capsys):
     assert cli.main(["--clear-cache"]) == 0
     assert not cache_dir.exists()
     assert "cleared 0 cache entries" in capsys.readouterr().out
+
+
+def test_cache_dir_is_public(tmp_path, monkeypatch):
+    """The CLI reports the cache location through checks.cache_dir(), not a private helper."""
+    monkeypatch.setenv("TAKEN_CACHE_DIR", str(tmp_path / "cache"))
+    assert checks.cache_dir() == str(tmp_path / "cache")
+    assert "checks._cache_dir" not in inspect.getsource(cli.run_clear_cache)
 
 
 def test_clear_cache_flag_empty_default_cache(tmp_path, capsys, monkeypatch):

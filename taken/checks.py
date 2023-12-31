@@ -515,6 +515,14 @@ def _cache_dir():
     return os.path.join(os.path.expanduser("~"), ".cache", "taken")
 
 
+def cache_dir():
+    """Public location of the API response cache, for callers outside this module.
+
+    The CLI uses it to name the directory in its --clear-cache messages.
+    """
+    return _cache_dir()
+
+
 def _cache_path():
     """Legacy single-file cache location (kept for one migration step)."""
     return os.path.join(_cache_dir(), _LEGACY_CACHE_FILENAME)

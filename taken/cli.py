@@ -677,7 +677,7 @@ def run_clear_cache():
     """Delete the API response cache and report what was removed."""
     removed = checks.clear_cache()
     if removed == -1:
-        cache_dir = checks._cache_dir()
+        cache_dir = checks.cache_dir()
         print(
             f"error: refusing to clear cache: {cache_dir!r} is not a safe path. "
             "Check your TAKEN_CACHE_DIR environment variable.",
@@ -685,7 +685,7 @@ def run_clear_cache():
         )
         return 1
     noun = "entry" if removed == 1 else "entries"
-    print(f"cleared {removed} cache {noun} ({checks._cache_dir()})")
+    print(f"cleared {removed} cache {noun} ({checks.cache_dir()})")
     return 0
 
 

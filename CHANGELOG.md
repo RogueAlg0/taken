@@ -17,6 +17,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+- `--clear-cache` now reads the cache location from a public `checks.cache_dir()` instead of reaching into the private `checks._cache_dir()`. No behavior change (#383).
+
 ## [0.9.1] - 2026-10-11
 
 ### Fixed
