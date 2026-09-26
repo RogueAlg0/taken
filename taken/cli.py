@@ -193,7 +193,8 @@ def main(argv=None):
 
 def format_discover_line(result):
     why = "; ".join(result["why"])
-    return f"{result['score']:3}  {result['target']}  {why}"
+    markers = "".join(f" [{m}]" for m in result["friendly_labels"] + result["welcoming"])
+    return f"{result['score']:3}  {result['target']}  {why}{markers}"
 
 
 def run_discover(args):
@@ -251,6 +252,8 @@ def run_discover(args):
                         "verdict": r["verdict"],
                         "reasons": r["reasons"],
                         "findings": r["findings"],
+                        "friendly_labels": r["friendly_labels"],
+                        "welcoming": r["welcoming"],
                     }
                     for r in results
                 ],
@@ -370,11 +373,21 @@ def run_batch(targets, args):
         for target, verdict, reasons, _findings in results:
             print(format_batch_line(target, verdict, reasons))
         if scanned_repo and results:
-            gos = [target for target, verdict, _r, _f in results if verdict == GO]
+            gos = [
+                (target, checks.friendly_labels(findings))
+                for target, verdict, _r, findings in results
+                if verdict == GO
+            ]
+            # First-time-friendly issues first: the safest ones to adopt.
+            gos.sort(key=lambda item: (not item[1], item[0]))
             print()
             if gos:
                 noun = "candidate" if len(gos) == 1 else "candidates"
-                print(f"{len(gos)} GO {noun}: " + ", ".join(gos))
+                parts = [
+                    f"{target} ({', '.join(labels)})" if labels else target
+                    for target, labels in gos
+                ]
+                print(f"{len(gos)} GO {noun}: " + ", ".join(parts))
             else:
                 print("no GO candidates in this scan.")
     return 3 if failed else 0

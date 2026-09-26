@@ -97,6 +97,17 @@ Each line explains its own score. `--label` restricts the search to one
 label instead of the default set (`good first issue`, `good-first-issue`,
 `beginner friendly`, `help wanted`).
 
+Every candidate is also marked for first-time friendliness: the issue's
+own labels (e.g. `[good first issue]`) plus repo-level signs that
+contributions are welcome (`[has CONTRIBUTING.md]`, recent merged PRs).
+Repo scans annotate the GO recommendations the same way, friendliest
+first:
+
+    taken octocat/hello-world
+      GO      octocat/hello-world#42  no claimant found
+      ...
+      1 GO candidate: octocat/hello-world#42 (good first issue)
+
 Candidates are verified in parallel (8 workers by default; `--jobs N`
 tunes it). A progress bar on stderr shows live feedback during the run;
 `--no-progress` hides it. The bar never touches stdout, so `--json`
@@ -145,10 +156,12 @@ Three tools:
 - `check_issue(owner, repo, issue_number, me?)`: GO/TAKEN/CAUTION verdict with
   reasons and full findings for one issue.
 - `scan_repo(owner, repo, limit?, label?, me?)`: the repo's open issues with
-  verdicts, GO first, plus `recommendations` (just the GO targets) and a
-  verdict `summary`.
+  verdicts, GO first, plus `recommendations` (just the GO targets), a
+  verdict `summary`, and per-issue `friendly_labels` / `welcoming` markers
+  so the safest issues to adopt stand out.
 - `discover_candidates(limit?, language?, label?, min_stars?, me?)`:
-  good-first-issue style candidates, verified and ranked.
+  good-first-issue style candidates, verified and ranked, each marked with
+  its first-time-friendly labels and contribution-welcome signals.
 
 `taken` is published in the official
 [MCP Registry](https://registry.modelcontextprotocol.io) as

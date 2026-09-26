@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- First-time-friendly recommendations: `taken --discover` lines and MCP
+  results now carry `friendly_labels` (the issue's own
+  first-time-contributor labels, e.g. `good first issue`) and `welcoming`
+  (repo-level signs contributions are welcome: a CONTRIBUTING guide,
+  recently merged PRs). These come from data the check suite already
+  fetches, so they cost no extra API calls. CLI repo scans annotate the GO
+  recommendations with friendly labels and list the friendliest first.
+
 ## [0.6.0] - 2026-09-26
 
 ### Fixed

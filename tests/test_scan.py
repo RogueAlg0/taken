@@ -7,8 +7,11 @@ from taken import checks
 from taken.cli import main, parse_target
 
 
-def make_fake(state, issue_numbers):
-    """state maps issue number to 'taken', 'go', or 'boom'."""
+def make_fake(state, issue_numbers, labels_map=None):
+    """state maps issue number to 'taken', 'go', or 'boom'.
+
+    labels_map optionally maps issue number to a list of label names.
+    """
 
     def fake(endpoint, params=None):
         if endpoint == "repos/octo/repo/issues":
@@ -24,10 +27,11 @@ def make_fake(state, issue_numbers):
                 return []
             if endpoint.endswith("/comments"):
                 return []
+            labels = [{"name": name} for name in (labels_map or {}).get(number, [])]
             return {
                 "state": "open",
                 "title": f"issue {number}",
-                "labels": [],
+                "labels": labels,
                 "assignees": [{"login": "dk5488"}] if kind == "taken" else [],
                 "comments": 0,
                 "user": {"login": "someone"},
@@ -70,10 +74,24 @@ def test_scan_checks_each_open_issue(monkeypatch, capsys):
 
 
 def test_scan_recommends_multiple_go_candidates(monkeypatch, capsys):
-    monkeypatch.setattr(checks, "gh_api", make_fake({1: "taken", 2: "go", 3: "go"}, [1, 2, 3]))
+    fake = make_fake(
+        {1: "taken", 2: "go", 3: "go"},
+        [1, 2, 3],
+        labels_map={3: ["good first issue"], 2: ["bug"]},
+    )
+    monkeypatch.setattr(checks, "gh_api", fake)
     assert main(["octo/repo"]) == 0
     lines = capsys.readouterr().out.strip().splitlines()
-    assert lines[-1] == "2 GO candidates: octo/repo#2, octo/repo#3"
+    # Friendly-labeled issues come first and are annotated.
+    assert lines[-1] == "2 GO candidates: octo/repo#3 (good first issue), octo/repo#2"
+
+
+def test_scan_recommendation_annotates_friendly_labels(monkeypatch, capsys):
+    fake = make_fake({1: "go"}, [1], labels_map={1: ["Help Wanted", "docs"]})
+    monkeypatch.setattr(checks, "gh_api", fake)
+    assert main(["octo/repo"]) == 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[-1] == "1 GO candidate: octo/repo#1 (Help Wanted)"
 
 
 def test_scan_no_go_candidates_says_so(monkeypatch, capsys):

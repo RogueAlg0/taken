@@ -72,6 +72,54 @@ CONTRIBUTING_PATHS = [
     "CONTRIBUTING.rst",
 ]
 
+# Labels that mark an issue as suitable for a first-time contributor.
+# Matched case-insensitively against the issue's label names.
+FIRST_TIME_LABELS = frozenset(
+    {
+        "good first issue",
+        "good-first-issue",
+        "good second issue",
+        "beginner friendly",
+        "beginner-friendly",
+        "beginner",
+        "first-timers-only",
+        "help wanted",
+        "easy",
+        "up-for-grabs",
+        "up for grabs",
+        "starter",
+        "newbie",
+        "newcomer friendly",
+        "newcomer-friendly",
+    }
+)
+
+
+def friendly_labels(findings):
+    """Issue labels marking it as first-time-contributor friendly.
+
+    Returns the matching label names in their original casing.
+    """
+    labels = (findings.get("issue") or {}).get("labels") or []
+    return [label for label in labels if label.lower() in FIRST_TIME_LABELS]
+
+
+def welcoming_signals(findings):
+    """Repo-level signs that outside contributions are welcome.
+
+    Cheap: both signals come from data the check suite already fetches,
+    so this adds no extra API calls.
+    """
+    signals = []
+    source = (findings.get("ai_policy") or {}).get("source")
+    if source:
+        signals.append(f"has {source.split('/')[-1]}")
+    merges = (findings.get("repo_health") or {}).get("recent_merges") or 0
+    if merges:
+        noun = "PR" if merges == 1 else "PRs"
+        signals.append(f"{merges} {noun} merged recently")
+    return signals
+
 
 class TakenError(Exception):
     """Something went wrong talking to GitHub."""

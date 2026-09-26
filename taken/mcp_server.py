@@ -74,7 +74,10 @@ def scan_repo(
 
     Results are ordered GO first, then CAUTION, then TAKEN, so the best
     candidates to volunteer for come first. `recommendations` lists just
-    the GO targets; `summary` counts each verdict.
+    the GO targets; `summary` counts each verdict. Each result carries
+    `friendly_labels` (first-time-contributor labels on the issue) and
+    `welcoming` (repo-level signs contributions are welcome), so an agent
+    can prefer the safest issues to adopt.
 
     Args:
         owner: repository owner login
@@ -91,11 +94,14 @@ def scan_repo(
     for issue_owner, issue_repo, number in issues:
         try:
             payload = _check_one(issue_owner, issue_repo, number, me=me)
+            findings = payload["findings"]
             results.append(
                 {
                     "target": payload["target"],
                     "verdict": payload["verdict"],
                     "reasons": payload["reasons"],
+                    "friendly_labels": checks.friendly_labels(findings),
+                    "welcoming": checks.welcoming_signals(findings),
                 }
             )
         except checks.TakenError as exc:
@@ -127,7 +133,9 @@ def discover_candidates(
     """Discover top open-source contribution candidates.
 
     Searches GitHub for good-first-issue style issues, runs taken's full
-    verification on each, and returns the ranked candidates.
+    verification on each, and returns the ranked candidates. Each result
+    carries `friendly_labels` (first-time-contributor labels on the issue)
+    and `welcoming` (repo-level signs contributions are welcome).
 
     Args:
         limit: max candidates to return (default 10)
@@ -156,6 +164,8 @@ def discover_candidates(
                 "why": item["why"],
                 "verdict": item["verdict"],
                 "reasons": item["reasons"],
+                "friendly_labels": item["friendly_labels"],
+                "welcoming": item["welcoming"],
             }
             for item in results
         ]

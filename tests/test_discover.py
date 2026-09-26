@@ -1,5 +1,6 @@
 """Discover tests: search -> verify -> rank."""
 
+import base64
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -30,7 +31,7 @@ def comment(login, body="looks good, thanks"):
     }
 
 
-def make_fake(items, states, comments_map):
+def make_fake(items, states, comments_map, labels_map=None, contributing=False):
     def fake(endpoint, params=None):
         if endpoint == "search/issues":
             return {
@@ -45,10 +46,11 @@ def make_fake(items, states, comments_map):
             if endpoint.endswith("/timeline"):
                 return []
             kind = states.get(number, "go")
+            labels = [{"name": name} for name in (labels_map or {}).get(number, [])]
             return {
                 "state": "open",
                 "title": f"issue {number}",
-                "labels": [],
+                "labels": labels,
                 "assignees": [{"login": "dk5488"}] if kind == "taken" else [],
                 "comments": len(comments_map.get(number, [])),
                 "user": {"login": "alice"},
@@ -56,6 +58,9 @@ def make_fake(items, states, comments_map):
                 "created_at": "2026-01-01T00:00:00Z",
             }
         if "/contents/" in endpoint:
+            if contributing and endpoint.endswith("/CONTRIBUTING.md"):
+                text = base64.b64encode(b"# Contributing\nBe kind, write tests.").decode()
+                return {"content": text}
             raise checks.NotFoundError(endpoint)
         if endpoint.startswith("repos/octo/repo/pulls"):
             return []
@@ -106,6 +111,41 @@ def test_discover_json(faked, capsys):
         ("octo/repo#3", 1),
     ]
     assert all(r["verdict"] == "GO" for r in data)
+    assert all(r["friendly_labels"] == [] for r in data)
+    assert all(r["welcoming"] == [] for r in data)
+
+
+def test_discover_marks_friendly_and_welcoming(monkeypatch, capsys):
+    items = [search_item(1, 1)]
+    fake = make_fake(
+        items,
+        {1: "go"},
+        {},
+        labels_map={1: ["good first issue", "bug"]},
+        contributing=True,
+    )
+    monkeypatch.setattr(checks, "gh_api", fake)
+    assert main(["--discover", "--label", "good first issue"]) == 0
+    line = capsys.readouterr().out.strip("\n").splitlines()[0]
+    assert "[good first issue]" in line
+    assert "[has CONTRIBUTING.md]" in line
+    assert "[bug]" not in line
+
+
+def test_discover_json_carries_friendly_and_welcoming(monkeypatch, capsys):
+    items = [search_item(1, 1)]
+    fake = make_fake(
+        items,
+        {1: "go"},
+        {},
+        labels_map={1: ["Help Wanted"]},
+        contributing=True,
+    )
+    monkeypatch.setattr(checks, "gh_api", fake)
+    assert main(["--discover", "--label", "good first issue", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data[0]["friendly_labels"] == ["Help Wanted"]
+    assert data[0]["welcoming"] == ["has CONTRIBUTING.md"]
 
 
 def test_discover_with_targets_is_error(capsys):

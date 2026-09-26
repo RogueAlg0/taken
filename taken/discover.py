@@ -106,6 +106,8 @@ def _verify_candidate(owner, repo, number, item, min_stars, me):
         "reasons": reasons,
         "findings": findings,
         "updated_at": item.get("updated_at") or "",
+        "friendly_labels": checks.friendly_labels(findings),
+        "welcoming": checks.welcoming_signals(findings),
     }
 
 
@@ -119,7 +121,9 @@ def discover(
     each candidate finishes, so callers can drive a progress bar.
 
     Returns a list of dicts sorted by score (desc), then recency (desc):
-    target, score, why, verdict, reasons, findings, updated_at.
+    target, score, why, verdict, reasons, findings, updated_at,
+    friendly_labels (first-time-contributor labels on the issue),
+    welcoming (repo-level signs contributions are welcome).
     """
     updated_after = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
     labels = [label] if label else SEARCH_LABELS

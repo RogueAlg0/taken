@@ -9,12 +9,12 @@ from taken import checks
 from taken.mcp_server import check_issue, discover_candidates, mcp, scan_repo
 
 
-def issue_payload(number, kind="go"):
+def issue_payload(number, kind="go", labels=()):
     return {
         "number": number,
         "state": "closed" if kind == "closed" else "open",
         "title": f"issue {number}",
-        "labels": [],
+        "labels": [{"name": name} for name in labels],
         "assignees": [{"login": "dk5488"}] if kind == "taken" else [],
         "comments": 0,
         "user": {"login": "alice"},
@@ -23,7 +23,7 @@ def issue_payload(number, kind="go"):
     }
 
 
-def make_fake(states):
+def make_fake(states, labels_map=None):
     def fake(endpoint, params=None):
         if endpoint == "repos/octo/repo/issues":
             return [issue_payload(n) for n in sorted(states)]
@@ -33,7 +33,9 @@ def make_fake(states):
                 return []
             if endpoint.endswith("/timeline"):
                 return []
-            return issue_payload(number, states.get(number, "go"))
+            return issue_payload(
+                number, states.get(number, "go"), (labels_map or {}).get(number, ())
+            )
         if "/contents/" in endpoint:
             raise checks.NotFoundError(endpoint)
         if endpoint.startswith("repos/octo/repo/pulls"):
@@ -116,6 +118,17 @@ def test_scan_repo_recommends_go_first(faked):
     assert payload["summary"] == {"GO": 1, "CAUTION": 0, "TAKEN": 2, "errors": 0}
 
 
+def test_scan_repo_carries_friendly_and_welcoming(monkeypatch):
+    monkeypatch.setattr(
+        checks, "gh_api", make_fake({1: "go"}, labels_map={1: ["good first issue", "bug"]})
+    )
+    payload = scan_repo("octo", "repo", limit=10)
+    assert len(payload["results"]) == 1
+    result = payload["results"][0]
+    assert result["friendly_labels"] == ["good first issue"]
+    assert result["welcoming"] == []  # no CONTRIBUTING.md in this fake
+
+
 def test_scan_repo_error_dict(monkeypatch):
     def boom(endpoint, params=None):
         raise checks.TakenError("repo gone")
@@ -150,3 +163,19 @@ def test_discover_candidates_verifies_and_ranks(monkeypatch):
     assert [r["target"] for r in payload["results"]] == ["octo/repo#1"]
     assert payload["results"][0]["verdict"] == "GO"
     assert payload["results"][0]["score"] >= 0
+
+
+def test_discover_candidates_carries_friendly_and_welcoming(monkeypatch):
+    items = [search_item(1)]
+    base = make_fake({1: "go"}, labels_map={1: ["good first issue"]})
+
+    def fake(endpoint, params=None):
+        if endpoint == "search/issues":
+            return {"total_count": 1, "incomplete_results": False, "items": items}
+        return base(endpoint, params)
+
+    monkeypatch.setattr(checks, "gh_api", fake)
+    payload = discover_candidates(limit=5, label="good first issue")
+    result = payload["results"][0]
+    assert result["friendly_labels"] == ["good first issue"]
+    assert result["welcoming"] == []
