@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- `--discover` ranking: candidates with equal scores are now ordered
+  most-recently-updated first, matching the documented "score desc, then
+  recency desc" order (the old double sort left ties oldest-first).
+
 ### Added
 - First-time-friendly recommendations: `taken --discover` lines and MCP
   results now carry `friendly_labels` (the issue's own

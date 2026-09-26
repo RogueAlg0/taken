@@ -168,6 +168,8 @@ def discover(
             entry = future.result()
             if entry is not None:
                 ranked.append(entry)
-    ranked.sort(key=lambda r: r["updated_at"])
-    ranked.sort(key=lambda r: -r["score"])
+    # Score desc, then recency desc: the freshest candidate wins ties.
+    # (A single sort; the old double-sort accidentally left equal scores
+    # oldest-first because the second stable sort preserved the first.)
+    ranked.sort(key=lambda r: (r["score"], r["updated_at"]), reverse=True)
     return ranked[:limit]

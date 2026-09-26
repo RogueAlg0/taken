@@ -148,6 +148,15 @@ def test_discover_json_carries_friendly_and_welcoming(monkeypatch, capsys):
     assert data[0]["welcoming"] == ["has CONTRIBUTING.md"]
 
 
+def test_discover_tie_break_prefers_recent(monkeypatch):
+    # Two equal-score candidates: the more recently updated one ranks first.
+    items = [search_item(1, 1), search_item(2, 2)]
+    monkeypatch.setattr(checks, "gh_api", make_fake(items, {1: "go", 2: "go"}, {}))
+    results = discover.discover(label="good first issue")
+    assert [r["target"] for r in results] == ["octo/repo#1", "octo/repo#2"]
+    assert results[0]["score"] == results[1]["score"]
+
+
 def test_discover_with_targets_is_error(capsys):
     with pytest.raises(SystemExit) as exc:
         main(["--discover", "octo/repo#1"])
