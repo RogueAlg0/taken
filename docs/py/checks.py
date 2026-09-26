@@ -10,6 +10,7 @@ import json
 import os
 import random
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -243,6 +244,27 @@ def _sweep_expired():
                 pass
     except OSError:
         pass
+
+
+def clear_cache():
+    """Delete the on-disk API response cache.
+
+    Counts the cache entry files first so callers can report what was
+    removed. Also drops the in-memory cache. Never raises: cache
+    problems must not break the tool.
+
+    Returns the number of cache entry files removed.
+    """
+    cache_dir = _cache_dir()
+    removed = 0
+    for _root, _dirs, files in os.walk(cache_dir):
+        removed += sum(1 for name in files if name.endswith(".json"))
+    try:
+        shutil.rmtree(cache_dir)
+    except OSError:
+        pass
+    _MEM_CACHE.clear()
+    return removed
 
 
 def _cache_read(key):
