@@ -135,9 +135,12 @@ offline (no API calls):
 DISCOVER_SAMPLE = """taken? --discover
 offline sample from a real run, not a live check.
 
-      6  FasterXML/jackson-datatypes-collections#2  maintainer replied; updated 0d ago; repo pushed 1d ago
-      6  padok-team/burrito#42  maintainer replied; updated 0d ago; repo pushed 1d ago
-      6  stefankueng/grepWin#618  maintainer replied; updated 0d ago; repo pushed 0d ago
+      6  FasterXML/jackson-datatypes-collections#2
+         maintainer replied; updated 0d ago; repo pushed 1d ago
+      6  padok-team/burrito#42
+         maintainer replied; updated 0d ago; repo pushed 1d ago
+      6  stefankueng/grepWin#618
+         maintainer replied; updated 0d ago; repo pushed 0d ago
 
   3 GO candidates. Only GO verdicts are ranked."""
 
