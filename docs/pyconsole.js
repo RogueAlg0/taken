@@ -19,11 +19,14 @@
   });
   term.open(document.getElementById('xterm'));
 
-  /* Clickable issue references: owner/repo#123 opens the GitHub issue.
-   * xterm 5.x only offers registerLinkProvider (registerLinkMatcher was
-   * removed), so matches are computed per line from the buffer. */
+  /* Clickable references: owner/repo#123 opens the GitHub issue, and any
+   * full http(s) URL opens directly. xterm 5.x only offers
+   * registerLinkProvider (registerLinkMatcher was removed), so matches are
+   * computed per line from the buffer. */
   var ISSUE_RE = /([\w][\w.-]*)\/([\w][\w.-]*)#(\d+)/g;
   var ISSUE_FULL_RE = /^([\w][\w.-]*)\/([\w][\w.-]*)#(\d+)$/;
+  var URL_RE = /https?:\/\/[^\s]+/g;
+  var URL_TRIM_RE = /[.,;:)\]}'"]+$/;
   term.registerLinkProvider({
     provideLinks: function (y, callback) {
       var line = term.buffer.active.getLine(y - 1);
@@ -51,6 +54,24 @@
                 'noopener'
               );
             }
+          },
+          decorations: { pointerCursor: true, underline: true }
+        });
+      }
+      /* Full http(s) URLs: trim trailing punctuation, then link the URL
+       * itself. GitHub issue URLs contain no '#', so this never overlaps
+       * the issue-ref matches above. */
+      URL_RE.lastIndex = 0;
+      while ((match = URL_RE.exec(text)) !== null) {
+        var url = match[0].replace(URL_TRIM_RE, '');
+        links.push({
+          range: {
+            start: { x: match.index + 1, y: y },
+            end: { x: match.index + url.length + 1, y: y }
+          },
+          text: url,
+          activate: function (event, text) {
+            window.open(text, '_blank', 'noopener');
           },
           decorations: { pointerCursor: true, underline: true }
         });

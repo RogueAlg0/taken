@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   PyPI was at 0.7.0), then reverted per maintainer preference: the dynamic
   badge lags releases due to shields caching but is self-maintaining and
   needs no per-release bump.
+- Web terminal: every http(s) URL printed in the console is now a clickable
+  link, not just `owner/repo#123` refs. The link provider scans each line
+  for URLs, trims trailing punctuation, and opens the URL in a new tab
+  (`noopener`).
 
 ## [0.7.0] - 2026-09-26
 
