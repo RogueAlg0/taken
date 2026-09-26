@@ -18,9 +18,9 @@
     },
     {
       "file": "taken/discover.py",
-      "cc": 55,
-      "commits": 8,
-      "hotspot": 440
+      "cc": 56,
+      "commits": 9,
+      "hotspot": 504
     }
   ]
 }
