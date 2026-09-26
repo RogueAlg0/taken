@@ -938,27 +938,34 @@ wheels = [
 
 [[package]]
 name = "taken-gh"
-version = "0.5.0"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
-    { name = "mcp" },
     { name = "tqdm" },
+]
+
+[package.optional-dependencies]
+mcp = [
+    { name = "mcp" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "mcp" },
     { name = "pytest" },
     { name = "ruff" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "mcp", specifier = ">=2.0,<3" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.0,<3" },
     { name = "tqdm", specifier = ">=4.66" },
 ]
+provides-extras = ["mcp"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "mcp", specifier = ">=2.0,<3" },
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.8" },
 ]

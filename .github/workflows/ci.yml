@@ -46,3 +46,11 @@ jobs:
           code=$?
           set -e
           test "$code" -eq 3
+      - name: Smoke test taken-mcp without the mcp extra
+        run: |
+          set +e
+          /tmp/smoke-venv/bin/taken-mcp 2>/tmp/taken-mcp-err.txt
+          code=$?
+          set -e
+          test "$code" -eq 2
+          grep -q 'taken-gh\[mcp\]' /tmp/taken-mcp-err.txt

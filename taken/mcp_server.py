@@ -7,23 +7,18 @@ Run with the ``taken-mcp`` console script (stdio transport). The server
 inherits the invoker's environment, so ``gh`` must be installed and
 authenticated, exactly like the ``taken`` CLI.
 
+Needs the optional ``mcp`` dependency (``pip install taken-gh[mcp]``).
+Without it this module still imports cleanly, but ``main()`` prints
+guidance instead of starting a server.
+
 Never print to stdout here: it carries the JSON-RPC stream. Logs go to
 stderr only.
 """
 
 import sys
 
-from mcp.server import MCPServer
-
 from taken import __version__, checks, discover
 from taken.verdict import decide
-
-mcp = MCPServer(
-    "taken",
-    title="taken",
-    description="Check whether a GitHub issue is already taken before volunteering for it.",
-    version=__version__,
-)
 
 
 def _check_one(owner, repo, number, me=None):
@@ -44,7 +39,6 @@ def _check_one(owner, repo, number, me=None):
 _VERDICT_RANK = {"GO": 0, "CAUTION": 1, "TAKEN": 2}
 
 
-@mcp.tool()
 def check_issue(owner: str, repo: str, issue_number: int, me: str | None = None) -> dict:
     """Check whether a GitHub issue is already taken.
 
@@ -68,7 +62,6 @@ def check_issue(owner: str, repo: str, issue_number: int, me: str | None = None)
         return {"target": f"{owner}/{repo}#{issue_number}", "error": str(exc)}
 
 
-@mcp.tool()
 def scan_repo(
     owner: str,
     repo: str,
@@ -128,7 +121,6 @@ def scan_repo(
     }
 
 
-@mcp.tool()
 def discover_candidates(
     limit: int = 10,
     language: str | None = None,
@@ -178,8 +170,43 @@ def discover_candidates(
     }
 
 
+def _create_server():
+    """Build the MCP server and register taken's tools.
+
+    Imported lazily so the ``taken`` CLI installs and runs without the
+    optional ``mcp`` dependency.
+    """
+    from mcp.server import MCPServer
+
+    server = MCPServer(
+        "taken",
+        title="taken",
+        description="Check whether a GitHub issue is already taken before volunteering for it.",
+        version=__version__,
+    )
+    server.tool()(check_issue)
+    server.tool()(scan_repo)
+    server.tool()(discover_candidates)
+    return server
+
+
+try:
+    mcp = _create_server()
+except ImportError:  # optional `mcp` dependency not installed
+    mcp = None
+
+
 def main():
+    """Entry point for the ``taken-mcp`` console script."""
+    if mcp is None:
+        print(
+            "taken-mcp needs the MCP SDK, which is an optional dependency: "
+            'install it with pip install "taken-gh[mcp]"',
+            file=sys.stderr,
+        )
+        return 2
     mcp.run(transport="stdio")
+    return 0
 
 
 if __name__ == "__main__":

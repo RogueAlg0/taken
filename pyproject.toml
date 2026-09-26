@@ -21,6 +21,10 @@ classifiers = [
 urls = { Homepage = "https://roguealg0.github.io/taken/", Repository = "https://github.com/RogueAlg0/taken" }
 dependencies = [
     "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+mcp = [
     "mcp>=2.0,<3",
 ]
 
@@ -32,6 +36,8 @@ taken-mcp = "taken.mcp_server:main"
 dev = [
     "pytest>=8",
     "ruff>=0.8",
+    # Optional at runtime (taken-gh[mcp]), but the test suite covers it.
+    "mcp>=2.0,<3",
 ]
 
 [build-system]

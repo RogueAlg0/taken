@@ -188,3 +188,34 @@ def test_discover_candidates_carries_friendly_and_welcoming(monkeypatch):
     result = payload["results"][0]
     assert result["friendly_labels"] == ["good first issue"]
     assert result["welcoming"] == []
+
+
+def _block_mcp_import(monkeypatch):
+    """Make any `import mcp...` raise ImportError, simulating a plain install."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name.partition(".")[0] == "mcp":
+            raise ImportError("No module named 'mcp'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+
+def test_create_server_raises_without_mcp(monkeypatch):
+    import taken.mcp_server as ms
+
+    _block_mcp_import(monkeypatch)
+    with pytest.raises(ImportError):
+        ms._create_server()
+
+
+def test_main_without_mcp_prints_guidance(monkeypatch, capsys):
+    import taken.mcp_server as ms
+
+    monkeypatch.setattr(ms, "mcp", None)
+    assert ms.main() == 2
+    err = capsys.readouterr().err
+    assert "taken-gh[mcp]" in err

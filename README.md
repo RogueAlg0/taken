@@ -138,9 +138,9 @@ tool call instead of shelling out to the CLI. It needs the same setup: `gh`
 installed and authenticated, and it only makes read-only API calls through
 your own login.
 
-Run it directly:
+Run it directly (the MCP server needs the optional `mcp` dependency):
 
-    uvx --from taken-gh taken-mcp
+    uvx --from "taken-gh[mcp]" taken-mcp
 
 Or add it to your MCP client config:
 
