@@ -1,0 +1,23 @@
+name: SonarQube
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  scan:
+    name: SonarQube Cloud scan
+    runs-on: ubuntu-latest
+    # Advisory only: skipped until the repo is connected on SonarQube
+    # Cloud and the SONAR_TOKEN secret is added (see #78).
+    if: ${{ secrets.SONAR_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: SonarQube Cloud scan
+        uses: sonarsource/sonarqube-scan-action@v8
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
