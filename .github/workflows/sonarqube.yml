@@ -20,6 +20,17 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - name: Install uv
+        if: env.SONAR_TOKEN != ''
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+      - name: Run tests with coverage
+        # pytest-cov is not a project dependency; --with adds it just for
+        # this run so the scanner gets a coverage report. --frozen keeps
+        # the locked test environment untouched.
+        if: env.SONAR_TOKEN != ''
+        run: uv run --frozen --with pytest-cov pytest --cov=taken --cov-report=xml
       - name: SonarQube Cloud scan
         if: env.SONAR_TOKEN != ''
         uses: sonarsource/sonarqube-scan-action@v8
