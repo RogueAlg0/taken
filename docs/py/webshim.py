@@ -24,6 +24,13 @@ from verdict import decide
 URL_RE = re.compile(r"^https?://github\.com/([^/\s]+)/([^/\s]+)/issues/(\d+)/?$")
 SHORT_RE = re.compile(r"^([^/\s#]+)/([^/\s#]+)#(\d+)$")
 PATH_RE = re.compile(r"^([^/\s]+)/([^/\s]+)/issues/(\d+)/?$")
+REPO_RE = re.compile(r"^([^/\s#]+)/([^/\s#]+)$")
+
+# Web console default: 5 issues per repo scan (each issue costs ~8 API
+# requests; visitors get 60/hour unauthenticated). --limit can raise it
+# to 10.
+WEB_SCAN_DEFAULT = 5
+WEB_SCAN_MAX = 10
 
 
 def _http_get(url):
@@ -117,7 +124,7 @@ def format_human(findings, verdict, reasons):
     return "\n".join(lines)
 
 
-HELP = """usage: taken [owner/repo#123 | issue URL] [--me login]
+HELP = """usage: taken [owner/repo#123 | issue URL | owner/repo] [--me login] [--limit N]
 
 This console runs taken's real Python code in your browser (Pyodide),
 doing live checks against GitHub's public API. No login, nothing installed.
@@ -125,11 +132,16 @@ doing live checks against GitHub's public API. No login, nothing installed.
   taken owner/repo#123
   taken https://github.com/owner/repo/issues/123
   taken owner/repo#123 --me mylogin   (ignore your own comments)
+  taken owner/repo                (scan open issues, recommend GO ones)
+  taken owner/repo --limit 3 --label "good first issue"
 
 offline (no API calls):
   taken --discover --limit 3   (sample output, not live)
   taken --version
-  clear"""
+  clear
+
+Repo scans check each issue live (~8 API requests each). Visitors get
+60 requests/hour, so scans default to 5 issues (max 10)."""
 
 DISCOVER_SAMPLE = """taken? --discover
 offline sample from a real run, not a live check.
@@ -151,7 +163,43 @@ def _parse_target(text):
         if match:
             owner, repo, number = match.groups()
             return ("issue", owner, repo, int(number))
+    match = REPO_RE.match(text)
+    if match:
+        owner, repo = match.groups()
+        return ("repo", owner, repo)
     return None
+
+
+def run_repo_scan(owner, repo, limit, label, me):
+    """Scan a repo's open issues and recommend the GO ones."""
+    try:
+        issues = checks.list_open_issues(owner, repo, limit=limit, label=label)
+    except checks.TakenError as exc:
+        return f"error: {owner}/{repo}: {exc}"
+    if not issues:
+        return f"note: {owner}/{repo}: no open issues found"
+    lines = [
+        f"taken? {owner}/{repo}  (scanning {len(issues)} most recently updated open issues)",
+        "",
+    ]
+    gos = []
+    for issue_owner, issue_repo, number in issues:
+        try:
+            findings = checks.run_checks(issue_owner, issue_repo, number, me=me)
+        except checks.TakenError as exc:
+            lines.append(f"ERROR   {issue_owner}/{issue_repo}#{number}  {exc}")
+            continue
+        verdict, reasons = decide(findings)
+        first = reasons[0] if reasons else ""
+        lines.append(f"{verdict:7} {issue_owner}/{issue_repo}#{number}  {first}")
+        if verdict == "GO":
+            gos.append(f"{issue_owner}/{issue_repo}#{number}")
+    lines.append("")
+    if gos:
+        lines.append(f"{len(gos)} GO candidate(s): " + ", ".join(gos))
+    else:
+        lines.append("no GO candidates in this scan.")
+    return "\n".join(lines)
 
 
 def run_command(line):
@@ -175,9 +223,22 @@ def run_command(line):
     if me_match:
         me = me_match.group(1)
         rest = re.sub(r"--me\s+\S+", "", rest, flags=re.I).strip()
+    limit = WEB_SCAN_DEFAULT
+    limit_match = re.search(r"--limit\s+(\d+)", rest, re.I)
+    if limit_match:
+        limit = min(int(limit_match.group(1)), WEB_SCAN_MAX)
+        rest = re.sub(r"--limit\s+\d+", "", rest, flags=re.I).strip()
+    label = None
+    label_match = re.search(r'--label\s+"([^"]+)"|--label\s+(\S+)', rest, re.I)
+    if label_match:
+        label = label_match.group(1) or label_match.group(2)
+        rest = re.sub(r'--label\s+("[^"]+"|\S+)', "", rest, flags=re.I).strip()
     target = _parse_target(rest)
     if not target:
-        return "need an issue target: taken owner/repo#123"
+        return "need an issue target: taken owner/repo#123 (or taken owner/repo to scan)"
+    if target[0] == "repo":
+        _, owner, repo = target
+        return run_repo_scan(owner, repo, limit, label, me)
     _, owner, repo, number = target
     try:
         findings = checks.run_checks(owner, repo, number, me=me)
