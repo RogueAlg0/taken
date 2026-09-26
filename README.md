@@ -160,3 +160,5 @@ always prints its evidence so you can judge for yourself.
 
 This project is built with AI assistance, and says so openly. Every
 contribution is reviewed and understood by its author before it lands.
+
+<!-- copilot-probe: temporary line to verify automatic code review -->
