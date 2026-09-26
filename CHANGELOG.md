@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.7.2] - 2026-09-26
+
+### Added
+- `.deb` packaging: the publish workflow builds `taken_<ver>_all.deb`
+  (offline install via a post-install virtualenv) and attaches it to the
+  tag's GitHub release.
+- Homebrew tap auto-bump: a workflow opens a formula-bump PR in the tap
+  repo after each release tag once the sdist is on PyPI.
+- SLSA provenance for release artifacts and REUSE compliance across the
+  repo; SonarQube scan now uses least-privilege tokens.
+
+### Fixed
+- `--clear-cache` fails closed for `TAKEN_CACHE_DIR` paths outside the
+  cache tree instead of deleting them.
+- `--discover` no longer aborts the entire run when a single candidate's
+  comments fetch fails; the failure is reported per candidate.
+- Rate-limit responses now get bounded retries with backoff and jitter,
+  honoring `Retry-After` (capped at 120s), instead of failing the run.
+
+### Changed
+- The publish-registry job only runs on version tags.
+- Test pipeline: mypy in CI, parallel test runs, and an 85% coverage gate.
+
 ## [0.7.1] - 2026-09-26
 
 ### Added
