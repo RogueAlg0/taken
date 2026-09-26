@@ -158,6 +158,40 @@ def test_discover_tie_break_prefers_recent(monkeypatch):
     assert results[0]["score"] == results[1]["score"]
 
 
+def test_discover_searches_every_label(monkeypatch, capsys):
+    # The first label alone returns enough items to fill the whole pool;
+    # the second label must still contribute candidates.
+    label_one = [search_item(n, 1) for n in range(1, 51)]
+    label_two = [search_item(n, 1) for n in range(101, 106)]
+    base = make_fake([], {}, {})
+
+    def fake(endpoint, params=None):
+        if endpoint == "search/issues":
+            q = (params or {}).get("q", "")
+            if 'label:"good first issue"' in q:
+                items = label_one
+            elif 'label:"good-first-issue"' in q:
+                items = label_two
+            else:
+                items = []
+            return {
+                "total_count": len(items),
+                "incomplete_results": False,
+                "items": items,
+            }
+        return base(endpoint, params)
+
+    monkeypatch.setattr(checks, "gh_api", fake)
+    assert main(["--discover"]) == 0
+    out = capsys.readouterr()
+    targets = [line.split()[1] for line in out.out.strip().splitlines()]
+    assert len(targets) <= discover.VERIFY_POOL
+    assert "octo/repo#1" in targets  # first label contributed
+    assert "octo/repo#101" in targets  # second label contributed too
+    assert "good first issue (50)" in out.err
+    assert "good-first-issue (5)" in out.err
+
+
 def test_discover_with_targets_is_error(capsys):
     with pytest.raises(SystemExit) as exc:
         main(["--discover", "octo/repo#1"])

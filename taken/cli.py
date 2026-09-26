@@ -227,6 +227,10 @@ def run_discover(args):
             bar.n = done
             bar.refresh()
 
+    def on_searched(searched):
+        detail = ", ".join(f"{lab} ({count})" for lab, count in searched)
+        print(f"searched {len(searched)} labels: {detail}", file=sys.stderr)
+
     try:
         results = discover.discover(
             limit=args.limit,
@@ -236,6 +240,7 @@ def run_discover(args):
             me=args.me,
             jobs=args.jobs,
             on_progress=on_progress if bar is not None else None,
+            on_searched=on_searched,
         )
     except checks.TakenError as exc:
         if bar is not None:

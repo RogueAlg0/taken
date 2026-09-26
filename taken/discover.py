@@ -120,27 +120,31 @@ def _verify_candidate(owner, repo, number, item, min_stars, me):
     }
 
 
-def discover(
-    limit=10, language=None, label=None, min_stars=0, me=None, jobs=DEFAULT_JOBS, on_progress=None
-):
-    """Search, verify, and rank contribution candidates.
+def _collect_candidates(labels, language, updated_after):
+    """Search every label and interleave the results into one deduped pool.
 
-    Candidates are verified concurrently (jobs threads). on_progress, when
-    given, is called as on_progress(done, total) from the calling thread as
-    each candidate finishes, so callers can drive a progress bar.
+    The old loop broke out as soon as the first label filled VERIFY_POOL,
+    so the remaining labels were never searched. Round-robin across the
+    per-label result lists guarantees every label contributes.
 
-    Returns a list of dicts sorted by score (desc), then recency (desc):
-    target, score, why, verdict, reasons, findings, updated_at,
-    friendly_labels (first-time-contributor labels on the issue),
-    welcoming (repo-level signs contributions are welcome).
+    Returns (candidates, searched): the pool capped at VERIFY_POOL, and a
+    [(label, items_returned)] list so callers can report what was searched.
     """
-    updated_after = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
-    labels = [label] if label else SEARCH_LABELS
-    candidates = []
-    seen = set()
+    per_label = []
     for lab in labels:
         query = build_query(lab, language=language, updated_after=updated_after)
-        for item in checks.search_issues(query, per_page=SEARCH_PER_PAGE):
+        items = checks.search_issues(query, per_page=SEARCH_PER_PAGE)
+        per_label.append((lab, items))
+    candidates = []
+    seen = set()
+    index = 0
+    while len(candidates) < VERIFY_POOL:
+        progressed = False
+        for _lab, items in per_label:
+            if index >= len(items):
+                continue
+            progressed = True
+            item = items[index]
             where = repo_of(item)
             if not where:
                 continue
@@ -152,8 +156,41 @@ def discover(
             candidates.append((owner, repo, item.get("number"), item))
             if len(candidates) >= VERIFY_POOL:
                 break
-        if len(candidates) >= VERIFY_POOL:
+        if not progressed:
             break
+        index += 1
+    searched = [(lab, len(items)) for lab, items in per_label]
+    return candidates, searched
+
+
+def discover(
+    limit=10,
+    language=None,
+    label=None,
+    min_stars=0,
+    me=None,
+    jobs=DEFAULT_JOBS,
+    on_progress=None,
+    on_searched=None,
+):
+    """Search, verify, and rank contribution candidates.
+
+    Candidates are verified concurrently (jobs threads). on_progress, when
+    given, is called as on_progress(done, total) from the calling thread as
+    each candidate finishes, so callers can drive a progress bar.
+    on_searched, when given, is called as on_searched([(label, count), ...])
+    after the search phase, so callers can report what was searched.
+
+    Returns a list of dicts sorted by score (desc), then recency (desc):
+    target, score, why, verdict, reasons, findings, updated_at,
+    friendly_labels (first-time-contributor labels on the issue),
+    welcoming (repo-level signs contributions are welcome).
+    """
+    updated_after = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    labels = [label] if label else SEARCH_LABELS
+    candidates, searched = _collect_candidates(labels, language, updated_after)
+    if on_searched is not None:
+        on_searched(searched)
 
     total = len(candidates)
     if on_progress is not None:

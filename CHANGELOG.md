@@ -19,6 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `author_association`: only OWNER/MEMBER/COLLABORATOR comments count, so a
   random "+1" no longer earns the +3 "maintainer replied" points. Your own
   `--me` login is also excluded from counting as maintainer engagement.
+- `--discover` now searches every requested label: candidates are drawn
+  round-robin from each label's results instead of stopping once the first
+  label fills the verify pool. The labels searched and their raw candidate
+  counts are printed to stderr.
 
 ### Added
 - First-time-friendly recommendations: `taken --discover` lines and MCP
