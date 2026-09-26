@@ -42,6 +42,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Web console: `owner/repo#123` references in the terminal are now
   clickable links that open the GitHub issue page (hover underlines, plain
   click opens).
+- Docs site no longer scrolls sideways on narrow screens: the stylesheet
+  now uses `border-box` sizing everywhere, guards with `overflow-x: clip`
+  on `html, body`, and keeps badge images within the viewport width.
 
 ### Added
 - First-time-friendly recommendations: `taken --discover` lines and MCP

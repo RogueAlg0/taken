@@ -8,13 +8,15 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
 <style>
   :root { color-scheme: light dark; }
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { overflow-x: clip; }
   body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.6;
          max-width: 42rem; margin: 0 auto; padding: 2rem 1.25rem; }
   h1 { font-size: 2.2rem; margin-bottom: 0.25rem; }
   .tagline { font-size: 1.15rem; opacity: 0.85; margin-top: 0; }
   .badges { margin: 0.5rem 0 0; }
   .badges a { text-decoration: none; margin-right: 0.25rem; }
-  .badges img { vertical-align: middle; }
+  .badges img { vertical-align: middle; max-width: 100%; height: auto; }
   pre { background: #f4f4f5; padding: 1rem; border-radius: 0.5rem;
         overflow-x: auto; }
   @media (prefers-color-scheme: dark) { pre { background: #1f1f23; } }
