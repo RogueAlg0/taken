@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Fixed
+- Docs version staleness: the PyPI badges in README.md and docs/index.html
+  now use a pinned static shields badge, because the dynamic
+  `img.shields.io/pypi/v/taken-gh` badge kept serving a stale cached
+  version (v0.5.0 while PyPI was at 0.7.0). The web console's
+  `taken --version` string in docs/py/webshim.py is bumped to 0.7.0.
+
 ## [0.7.0] - 2026-09-26
 
 ### Fixed

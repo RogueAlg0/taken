@@ -1,6 +1,9 @@
 # taken?
 
-[![PyPI](https://img.shields.io/pypi/v/taken-gh)](https://pypi.org/project/taken-gh/)
+<!-- Static PyPI badge: the dynamic shields /pypi/v badge serves a stale
+     cached version (it rendered v0.5.0 while PyPI was already at 0.7.0),
+     so the version here is pinned and must be bumped with every release. -->
+[![PyPI](https://img.shields.io/badge/pypi-v0.7.0-blue)](https://pypi.org/project/taken-gh/)
 [![CI](https://github.com/RogueAlg0/taken/actions/workflows/ci.yml/badge.svg)](https://github.com/RogueAlg0/taken/actions)
 [![License: MIT](https://img.shields.io/github/license/RogueAlg0/taken)](LICENSE)
 <!-- Static python badge: shields' pypi/pyversions reads trove classifiers,
