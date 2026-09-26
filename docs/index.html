@@ -7,32 +7,30 @@
 <meta name="description" content="taken? answers one question before you volunteer for a GitHub issue: is it already taken?">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
 <style>
-  :root { color-scheme: light dark; }
+  :root { color-scheme: dark; }
   *, *::before, *::after { box-sizing: border-box; }
   html, body { overflow-x: clip; }
   body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.6;
-         max-width: 42rem; margin: 0 auto; padding: 2rem 1.25rem; }
+         max-width: 42rem; margin: 0 auto; padding: 2rem 1.25rem;
+         background: #0d1117; color: #e6edf3; }
+  a { color: #58a6ff; }
   h1 { font-size: 2.2rem; margin-bottom: 0.25rem; }
   .tagline { font-size: 1.15rem; opacity: 0.85; margin-top: 0; }
   .badges { margin: 0.5rem 0 0; }
   .badges a { text-decoration: none; margin-right: 0.25rem; }
   .badges img { vertical-align: middle; max-width: 100%; height: auto; }
-  pre { background: #f4f4f5; padding: 1rem; border-radius: 0.5rem;
+  pre { background: #161b22; border: 1px solid #30363d; padding: 1rem; border-radius: 0.5rem;
         overflow-x: auto; }
-  @media (prefers-color-scheme: dark) { pre { background: #1f1f23; } }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  p code, li code { background: #161b22; border: 1px solid #30363d; padding: 0.1rem 0.35rem;
+                    border-radius: 0.3rem; font-size: 0.9em; }
   .verdict { display: inline-block; padding: 0.15rem 0.6rem; border-radius: 999px;
              font-weight: 600; font-size: 0.9rem; }
-  .go { background: #dcfce7; color: #166534; }
-  .taken { background: #fee2e2; color: #991b1b; }
-  .caution { background: #fef3c7; color: #92400e; }
-  @media (prefers-color-scheme: dark) {
-    .go { background: #14532d; color: #bbf7d0; }
-    .taken { background: #7f1d1d; color: #fecaca; }
-    .caution { background: #78350f; color: #fde68a; }
-  }
-  .terminal { background: #0d1117; border-radius: 0.75rem; overflow: hidden;
-              margin: 1rem 0; box-shadow: 0 8px 30px rgba(0,0,0,0.25); }
+  .go { background: #14532d; color: #bbf7d0; }
+  .taken { background: #7f1d1d; color: #fecaca; }
+  .caution { background: #78350f; color: #fde68a; }
+  .terminal { background: #0d1117; border: 1px solid #30363d; border-radius: 0.75rem; overflow: hidden;
+              margin: 1rem 0; box-shadow: 0 8px 30px rgba(0,0,0,0.45); }
   .term-bar { display: flex; gap: 0.45rem; padding: 0.6rem 0.9rem;
               background: #161b22; }
   .term-bar span { width: 0.7rem; height: 0.7rem; border-radius: 50%; }
@@ -55,7 +53,7 @@
   .term-input-row input { flex: 1; background: transparent; border: none; outline: none;
                           color: #c9d1d9; font: inherit; padding: 0; }
   .term-hint { font-size: 0.85rem; opacity: 0.75; }
-  .term-hint code { cursor: pointer; }
+  .term-hint code { cursor: pointer; color: #7ee787; }
   footer { margin-top: 3rem; font-size: 0.9rem; opacity: 0.7; }
 </style>
 </head>
