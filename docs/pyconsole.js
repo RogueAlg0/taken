@@ -68,7 +68,10 @@
       prompt();
       return;
     }
-    out('\x1b[2mchecking live via GitHub\'s public API...\x1b[0m');
+    /* Only live commands hit the API (--help/--version/clear are offline). */
+    if (!/^(taken(\s+(--help|--version|-h))?\s*|--help|--version)$/.test(cmd)) {
+      out('\x1b[2mchecking live via GitHub\'s public API...\x1b[0m');
+    }
     /* Yield so the line above paints before the synchronous XHR blocks. */
     setTimeout(function () {
       var result;

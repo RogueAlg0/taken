@@ -11,15 +11,20 @@ Notes for maintainers:
   time of the Pyodide-console PR. Re-copy them when the pipeline changes.
 - MAX_SCAN_PAGES is capped at 1 here to respect GitHub's unauthenticated
   budget (60 req/hour per visitor). The CLI scans deeper.
+- Live discover mirrors taken/discover.py but sequential and budget-capped:
+  2 labels x 1 search page each, verify up to 3 candidates (~9 requests
+  each). Scoring logic is the same (maintainer replied +3, updated in
+  last 7 days +2, repo pushed in last 7 days +1).
 - The file cache is disabled; there is no persistent disk in the page.
 """
 
 import json
 import re
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import checks
-from verdict import decide
+from verdict import GO, decide
 
 URL_RE = re.compile(r"^https?://github\.com/([^/\s]+)/([^/\s]+)/issues/(\d+)/?$")
 SHORT_RE = re.compile(r"^([^/\s#]+)/([^/\s#]+)#(\d+)$")
@@ -135,25 +140,123 @@ doing live checks against GitHub's public API. No login, nothing installed.
   taken owner/repo                (scan open issues, recommend GO ones)
   taken owner/repo --limit 3 --label "good first issue"
 
+  taken --discover --limit 3   (live search + full verification)
+  taken --discover --language python --min-stars 50
+
 offline (no API calls):
-  taken --discover --limit 3   (sample output, not live)
   taken --version
   clear
 
 Repo scans check each issue live (~8 API requests each). Visitors get
 60 requests/hour, so scans default to 5 issues (max 10)."""
 
-DISCOVER_SAMPLE = """taken? --discover
-offline sample from a real run, not a live check.
+# Web live discover: 2 labels x 1 search page each, verify up to 3
+# candidates (~9 requests each). ~30 requests total, inside the 60/hour
+# visitor budget. Scoring mirrors taken/discover.py.
+WEB_DISCOVER_LABELS = ["good first issue", "help wanted"]
+WEB_DISCOVER_PER_LABEL = 5
+WEB_DISCOVER_DEFAULT = 3
+WEB_DISCOVER_MAX = 5
 
-      6  FasterXML/jackson-datatypes-collections#2
-         maintainer replied; updated 0d ago; repo pushed 1d ago
-      6  padok-team/burrito#42
-         maintainer replied; updated 0d ago; repo pushed 1d ago
-      6  stefankueng/grepWin#618
-         maintainer replied; updated 0d ago; repo pushed 0d ago
 
-  3 GO candidates. Only GO verdicts are ranked."""
+def _days_ago(iso_ts):
+    try:
+        dt = datetime.fromisoformat((iso_ts or "").replace("Z", "+00:00"))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - dt).days
+
+
+def _maintainer_engaged(issue, comments):
+    """Someone other than the author, not a bot, commented."""
+    author = issue.get("author")
+    for comment in comments:
+        login = (comment.get("user") or {}).get("login") or ""
+        if login and login != author and not login.endswith("[bot]"):
+            return True
+    return False
+
+
+def _score_candidate(findings, updated_at, engaged):
+    """Same explainable score as taken/discover.py."""
+    points = 0
+    why = []
+    if engaged:
+        points += 3
+        why.append("maintainer replied")
+    age_days = _days_ago(updated_at)
+    if age_days is not None and age_days <= 7:
+        points += 2
+        why.append(f"updated {age_days}d ago")
+    push_days = _days_ago(findings["repo_health"].get("pushed_at") or "")
+    if push_days is not None and push_days <= 7:
+        points += 1
+        why.append(f"repo pushed {push_days}d ago")
+    if not why:
+        why.append("passed verification")
+    return points, why
+
+
+def run_discover_web(limit, language, label, min_stars, me):
+    """Live candidate discovery: search GitHub, verify each, rank GO ones."""
+    updated_after = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    labels = [label] if label else WEB_DISCOVER_LABELS
+    candidates, seen = [], set()
+    for lab in labels:
+        query = f'is:open is:issue no:assignee label:"{lab}" updated:>={updated_after}'
+        if language:
+            query += f" language:{language}"
+        try:
+            items = checks.search_issues(query, per_page=WEB_DISCOVER_PER_LABEL)
+        except checks.TakenError as exc:
+            return f"error: live discover failed: {exc}"
+        for item in items:
+            url = (item.get("repository_url") or "").rstrip("/").split("/")
+            if len(url) < 2:
+                continue
+            owner, repo = url[-2], url[-1]
+            key = (owner, repo, item.get("number"))
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append((owner, repo, item.get("number"), item.get("updated_at") or ""))
+            if len(candidates) >= limit:
+                break
+        if len(candidates) >= limit:
+            break
+    ranked = []
+    for owner, repo, number, updated_at in candidates:
+        try:
+            findings = checks.run_checks(owner, repo, number, me=me)
+        except checks.TakenError:
+            continue  # fail-closed per issue; keep scanning the rest
+        verdict, _reasons = decide(findings)
+        if verdict != GO:
+            continue
+        if (findings["repo_health"].get("stars") or 0) < min_stars:
+            continue
+        try:
+            comments = checks.fetch_comments(owner, repo, number)
+        except checks.TakenError:
+            comments = []
+        engaged = _maintainer_engaged(findings["issue"], comments)
+        points, why = _score_candidate(findings, updated_at, engaged)
+        ranked.append((points, updated_at, f"{owner}/{repo}#{number}", why))
+    if not ranked:
+        return "no GO candidates found live. Try again later or widen with --language/--label."
+    ranked.sort(key=lambda r: (r[0], r[1]), reverse=True)
+    lines = [
+        "taken? --discover",
+        "live search + full verification, ranked by maintainer responsiveness.",
+        "",
+    ]
+    for points, _updated_at, target, why in ranked:
+        lines.append(f"{points:3}  {target}  {'; '.join(why)}")
+    lines.append("")
+    lines.append(f"{len(ranked)} GO candidate(s). Only GO verdicts are ranked.")
+    return "\n".join(lines)
 
 
 def _parse_target(text):
@@ -213,7 +316,28 @@ def run_command(line):
     if low == "taken --version":
         return "taken 0.5.0 (Pyodide build: taken's real Python code, running in your browser)"
     if low.startswith("taken --discover"):
-        return DISCOVER_SAMPLE
+        discover_rest = low[len("taken --discover") :].strip()
+        dlimit = WEB_DISCOVER_DEFAULT
+        dlimit_match = re.search(r"--limit\s+(\d+)", discover_rest)
+        if dlimit_match:
+            dlimit = min(int(dlimit_match.group(1)), WEB_DISCOVER_MAX)
+        dlang = None
+        dlang_match = re.search(r"--language\s+(\S+)", discover_rest)
+        if dlang_match:
+            dlang = dlang_match.group(1)
+        dlabel = None
+        dlabel_match = re.search(r'--label\s+"([^"]+)"|--label\s+(\S+)', discover_rest)
+        if dlabel_match:
+            dlabel = dlabel_match.group(1) or dlabel_match.group(2)
+        dstars = 0
+        dstars_match = re.search(r"--min-stars\s+(\d+)", discover_rest)
+        if dstars_match:
+            dstars = int(dstars_match.group(1))
+        dme = None
+        dme_match = re.search(r"--me\s+(\S+)", discover_rest)
+        if dme_match:
+            dme = dme_match.group(1)
+        return run_discover_web(dlimit, dlang, dlabel, dstars, dme)
     m = re.match(r"^taken\s+(.+)$", line, re.I)
     if not m:
         return 'unknown command. Try "taken --help".'
