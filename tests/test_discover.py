@@ -22,10 +22,11 @@ def search_item(number, days_ago):
     }
 
 
-def comment(login, body="looks good, thanks"):
+def comment(login, body="looks good, thanks", author_association="MEMBER"):
     return {
         "user": {"login": login},
         "body": body,
+        "author_association": author_association,
         "created_at": "2026-09-20T00:00:00Z",
         "html_url": "https://github.com/octo/repo/issues/1#issuecomment-1",
     }
@@ -177,6 +178,40 @@ def test_maintainer_engaged():
     assert discover.maintainer_engaged(issue, [comment("alice")]) is False
     assert discover.maintainer_engaged(issue, [comment("some[bot]")]) is False
     assert discover.maintainer_engaged(issue, []) is False
+
+
+def test_maintainer_engaged_uses_author_association():
+    issue = {"author": "alice"}
+    for assoc in ("OWNER", "MEMBER", "COLLABORATOR"):
+        assert (
+            discover.maintainer_engaged(issue, [comment("pat", author_association=assoc)]) is True
+        )
+    for assoc in ("NONE", "CONTRIBUTOR", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", None):
+        assert (
+            discover.maintainer_engaged(issue, [comment("pat", author_association=assoc)]) is False
+        )
+
+
+def test_maintainer_engaged_ignores_me():
+    issue = {"author": "alice"}
+    mine = [comment("me", author_association="MEMBER")]
+    assert discover.maintainer_engaged(issue, mine, me="me") is False
+    assert discover.maintainer_engaged(issue, mine) is True
+    assert (
+        discover.maintainer_engaged(
+            issue, mine + [comment("owner-amy", author_association="OWNER")], me="me"
+        )
+        is True
+    )
+
+
+def test_discover_me_comment_not_counted_as_maintainer(monkeypatch, capsys):
+    items = [search_item(1, 1)]
+    fake = make_fake(items, {1: "go"}, {1: [comment("me", author_association="MEMBER")]})
+    monkeypatch.setattr(checks, "gh_api", fake)
+    assert main(["--discover", "--label", "good first issue", "--me", "me"]) == 0
+    line = capsys.readouterr().out.strip("\n").splitlines()[0]
+    assert "maintainer replied" not in line
 
 
 def test_repo_of():

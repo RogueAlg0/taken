@@ -18,6 +18,11 @@ SEARCH_PER_PAGE = 50
 VERIFY_POOL = 40
 DEFAULT_JOBS = 8
 
+# author_association values that mean the commenter can speak for the repo.
+# A random "+1" from a passerby (NONE/CONTRIBUTOR/...) is not maintainer
+# engagement and must not earn the +3 "maintainer replied" points.
+MAINTAINER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
 
 def build_query(label, language=None, updated_after=None):
     parts = ["is:open", "is:issue", "no:assignee", f'label:"{label}"']
@@ -36,16 +41,20 @@ def repo_of(search_item):
     return url[-2], url[-1]
 
 
-def maintainer_engaged(issue, comments):
-    """Heuristic: someone other than the author, not a bot, commented.
+def maintainer_engaged(issue, comments, me=None):
+    """Heuristic: a maintainer, not the author, you, or a bot, commented.
 
     A maintainer reply is the strongest cheap signal that volunteering on
-    the issue will get a response. Bots don't count.
+    the issue will get a response. Only OWNER/MEMBER/COLLABORATOR
+    author_associations count; bots and the issue author never do, and
+    neither does your own login (see --me).
     """
     author = issue.get("author")
     for comment in comments:
         login = (comment.get("user") or {}).get("login") or ""
-        if login and login != author and not login.endswith("[bot]"):
+        if not login or login == author or login == me or login.endswith("[bot]"):
+            continue
+        if comment.get("author_association") in MAINTAINER_ASSOCIATIONS:
             return True
     return False
 
@@ -96,7 +105,7 @@ def _verify_candidate(owner, repo, number, item, min_stars, me):
     if (findings["repo_health"].get("stars") or 0) < min_stars:
         return None
     comments = checks.fetch_comments(owner, repo, number)
-    engaged = maintainer_engaged(findings["issue"], comments)
+    engaged = maintainer_engaged(findings["issue"], comments, me=me)
     points, why = score_candidate(findings, item.get("updated_at"), engaged)
     return {
         "target": f"{owner}/{repo}#{number}",

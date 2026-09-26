@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   present, matching what `--discover` lines and the MCP tools already show.
 - MCP `check_issue` now returns top-level `friendly_labels` and `welcoming`,
   consistent with `scan_repo` and `discover_candidates`.
+- Discover's maintainer-engagement signal now uses the comment's
+  `author_association`: only OWNER/MEMBER/COLLABORATOR comments count, so a
+  random "+1" no longer earns the +3 "maintainer replied" points. Your own
+  `--me` login is also excluded from counting as maintainer engagement.
 
 ### Added
 - First-time-friendly recommendations: `taken --discover` lines and MCP
