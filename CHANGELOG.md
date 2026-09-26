@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Hotspots badge in the README: per-file cyclomatic complexity x commit churn.
+  `scripts/hotspots.py` regenerates `docs/badges/hotspot.json`; a workflow
+  opens a refresh PR on every push to main when the numbers change.
 - New `--clear-cache` flag: deletes the API response cache
   (`~/.cache/taken`, overridable via `TAKEN_CACHE_DIR`) and reports how
   many entries were cleared. Works as a standalone action:

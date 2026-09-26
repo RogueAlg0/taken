@@ -8,6 +8,7 @@
      the Python classifiers below. -->
 [![Python](https://img.shields.io/badge/python-%3E%3D3.10-blue)](https://pypi.org/project/taken-gh/)
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.RogueAlg0%2Ftaken-blue)](https://registry.modelcontextprotocol.io)
+[![Hotspots](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FRogueAlg0%2Ftaken%2Fmain%2Fdocs%2Fbadges%2Fhotspot.json)](https://github.com/RogueAlg0/taken#hotspots)
 
 <!-- mcp-name: io.github.RogueAlg0/taken -->
 
@@ -216,6 +217,18 @@ always prints its evidence so you can judge for yourself.
     uv run pytest
     uv run ruff check
     uv run ruff format --check
+
+## Hotspots
+
+The hotspots badge tracks files that are both complex and frequently changed:
+complexity is cyclomatic complexity summed per file (via radon); churn is the
+number of commits touching the file. A file needs attention when it has
+complexity >= 50 and >= 5 commits; these are the files where refactoring pays
+off most.
+
+To regenerate the badge data locally:
+
+    uv run --python 3.12 --with radon scripts/hotspots.py
 
 ## AI assistance
 

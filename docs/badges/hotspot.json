@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "label": "hotspots",
+  "message": "3 need attention",
+  "color": "orange",
+  "files": [
+    {
+      "file": "taken/checks.py",
+      "cc": 140,
+      "commits": 10,
+      "hotspot": 1400
+    },
+    {
+      "file": "taken/cli.py",
+      "cc": 80,
+      "commits": 10,
+      "hotspot": 800
+    },
+    {
+      "file": "taken/discover.py",
+      "cc": 55,
+      "commits": 7,
+      "hotspot": 385
+    }
+  ]
+}

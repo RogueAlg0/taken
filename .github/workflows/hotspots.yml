@@ -1,0 +1,55 @@
+name: Hotspot badge refresh
+
+# Keeps docs/badges/hotspot.json (the README "hotspots" badge) in sync with
+# main. The badge is computed from git history, so it is recomputed here on
+# every push to main; when the numbers changed, a refresh PR is opened. The
+# PR goes through the normal required checks like any other change.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history: churn needs every commit
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+      - name: Recompute hotspot metrics
+        run: uv run --python 3.12 --with radon scripts/hotspots.py
+      - name: Open refresh PR if the badge changed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git diff --quiet -- docs/badges/hotspot.json; then
+            echo "badge unchanged, nothing to do"
+            exit 0
+          fi
+          OPEN=$(gh pr list --state open \
+            --search "refresh hotspot badge metrics in:title" \
+            --json number --jq 'length')
+          if [ "$OPEN" -gt 0 ]; then
+            echo "a refresh PR is already open, skipping"
+            exit 0
+          fi
+          BRANCH="chore/hotspot-refresh-${GITHUB_SHA::7}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add docs/badges/hotspot.json
+          git commit -m "chore: refresh hotspot badge metrics"
+          git push origin "$BRANCH"
+          MSG=$(python -c "import json; b=json.load(open('docs/badges/hotspot.json')); print(b['message'])")
+          gh pr create --base main --head "$BRANCH" \
+            --title "chore: refresh hotspot badge metrics" \
+            --body "Refresh of the README hotspots badge (assessed at ${GITHUB_SHA::7}). Current reading: **${MSG}**. Metric: cyclomatic complexity x commit churn per file; see \`scripts/hotspots.py\`."
+          gh pr merge --auto --squash "$BRANCH"
