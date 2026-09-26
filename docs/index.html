@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>taken? : is this GitHub issue taken?</title>
 <meta name="description" content="taken? answers one question before you volunteer for a GitHub issue: is it already taken?">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
 <style>
   :root { color-scheme: light dark; }
   body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.6;
@@ -82,12 +83,10 @@ computed in your browser via GitHub's public API. No login, no install.
 (Public API: 60 requests/hour, one check uses about 7.)</p>
 <div class="terminal" id="demo-term">
   <div class="term-bar"><span></span><span></span><span></span></div>
-  <div class="term-body" id="term-body"></div>
-  <div class="term-input-row"><span>$</span><input id="term-input" type="text"
-    autocomplete="off" autocapitalize="off" spellcheck="false"
-    placeholder="type a command, e.g. taken --help"></div>
+  <div id="xterm" style="padding: 0.5rem 0.75rem;"></div>
 </div>
-<p class="term-hint">Try:
+<p class="term-hint">A real console: taken's actual Python code runs in your browser
+(Pyodide), with live checks against GitHub's public API. Try:
 <code data-cmd="taken microsoft/scope#1275">taken microsoft/scope#1275</code> ·
 <code data-cmd="taken IBM/mcp-context-forge#5848">taken IBM/mcp-context-forge#5848</code> ·
 <code data-cmd="taken --discover --limit 3">taken --discover --limit 3</code> (sample output)</p>
@@ -150,103 +149,8 @@ always prints its evidence so you can judge for yourself.</p>
   Built with AI assistance, openly disclosed.
 </footer>
 
-<script>window.TAKEN_VERSION = '0.5.0';</script>
-<script src="try.js"></script>
-<script>
-(function () {
-  var body = document.getElementById('term-body');
-  var input = document.getElementById('term-input');
-  var term = document.getElementById('demo-term');
-  var history = [], hIndex = -1;
-
-  function esc(s) {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-  function print(html) {
-    var div = document.createElement('div');
-    div.innerHTML = html;
-    body.appendChild(div);
-    body.scrollTop = body.scrollHeight;
-  }
-  var HELP = '<span class="dim">usage: taken [owner/repo#123 | issue URL] [--me login]\n\n' +
-    'live commands (real GitHub API checks, no login):\n' +
-    '  taken owner/repo#123\n' +
-    '  taken https://github.com/owner/repo/issues/123\n' +
-    '  taken owner/repo#123 --me mylogin   (ignore your own comments)\n\n' +
-    'offline (no API calls):\n' +
-    '  taken --discover --limit 3   (sample output, not live)\n' +
-    '  taken --version\n' +
-    '  clear</span>';
-
-  var DISCOVER_DEMO =
-    'taken? --discover\n' +
-    '<span class="dim">offline sample from a real run, not a live check.</span>\n\n' +
-    '      6  FasterXML/jackson-datatypes-collections#2  maintainer replied; updated 0d ago; repo pushed 1d ago\n' +
-    '      6  padok-team/burrito#42  maintainer replied; updated 0d ago; repo pushed 1d ago\n' +
-    '      6  stefankueng/grepWin#618  maintainer replied; updated 0d ago; repo pushed 0d ago\n\n' +
-    '  3 <span class="v-go">GO</span> candidates. Only GO verdicts are ranked.';
-
-  function run(raw) {
-    var cmd = raw.trim();
-    print('<span class="cmd">$ ' + esc(raw) + '</span>');
-    if (!cmd) return;
-    history.push(raw); hIndex = history.length;
-    var key = cmd.toLowerCase();
-    if (key === 'clear') { body.innerHTML = ''; return; }
-    if (key === 'taken --help' || key === 'help') { print(HELP); return; }
-    if (key === 'taken --version') { print('taken 0.5.0 (live web port)'); return; }
-    if (key.indexOf('taken --discover') === 0) {
-      print(DISCOVER_DEMO);
-      return;
-    }
-    var m = cmd.match(/^taken\s+(.+)$/i);
-    if (!m) {
-      print('<span class="dim">unknown command. Try: taken --help</span>');
-      return;
-    }
-    var rest = m[1].trim();
-    var meMatch = rest.match(/--me\s+([^\s]+)/i);
-    var me = meMatch ? meMatch[1] : null;
-    var target = rest.replace(/--me\s+[^\s]+/i, '').trim();
-    if (!target || target.charAt(0) === '-') {
-      print('<span class="dim">need an issue target: taken owner/repo#123</span>');
-      return;
-    }
-    if (!window.TakenLive) {
-      print('<span class="dim">live engine failed to load. Check your connection and reload.</span>');
-      return;
-    }
-    print('<span class="dim">checking live via GitHub\'s public API...</span>');
-    var spinner = body.lastChild;
-    window.TakenLive.runCheck(target, me).then(function (r) {
-      if (spinner.parentNode === body) body.removeChild(spinner);
-      if (r.error) print('<span class="v-caution">error: ' + esc(r.error) + '</span>');
-      else print(r.html);
-    });
-  }
-
-  print('<span class="dim">taken? live terminal. Type <span class="cmd">taken owner/repo#123</span> and press enter for a real live check, or <span class="cmd">taken --help</span>.</span>');
-
-  input.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') { run(input.value); input.value = ''; }
-    else if (e.key === 'ArrowUp') {
-      if (hIndex > 0) { hIndex--; input.value = history[hIndex] || ''; }
-      e.preventDefault();
-    } else if (e.key === 'ArrowDown') {
-      if (hIndex < history.length - 1) { hIndex++; input.value = history[hIndex]; }
-      else { hIndex = history.length; input.value = ''; }
-      e.preventDefault();
-    }
-  });
-  term.addEventListener('click', function () { input.focus(); });
-  document.querySelectorAll('.term-hint code').forEach(function (el) {
-    el.addEventListener('click', function () {
-      input.value = el.getAttribute('data-cmd');
-      input.focus();
-    });
-  });
-})();
-</script>
-
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.27.4/full/pyodide.js"></script>
+<script src="pyconsole.js"></script>
 </body>
 </html>
