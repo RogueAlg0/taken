@@ -188,7 +188,10 @@ def test_discover_searches_every_label(monkeypatch, capsys):
 
     monkeypatch.setattr(checks, "gh_api", fake)
     searched = []
-    results = discover.discover(jobs=1, on_searched=searched.append)
+    # limit=50 returns the whole verify pool: this test is about which
+    # labels contribute candidates to the pool, not about ranking ties,
+    # so it must not depend on top-N tie-break order.
+    results = discover.discover(jobs=1, limit=50, on_searched=searched.append)
     targets = [r["target"] for r in results]
     assert len(targets) <= discover.VERIFY_POOL
     assert "octo/repo#1" in targets  # first label contributed
