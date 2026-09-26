@@ -107,6 +107,11 @@ def build_parser():
         action="store_true",
         help="bypass the API response cache (~/.cache/taken, 1h TTL)",
     )
+    parser.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="delete the API response cache (~/.cache/taken) and exit",
+    )
     parser.add_argument("--version", action="version", version=f"taken {__version__}")
     return parser
 
@@ -173,6 +178,8 @@ def format_human(findings, verdict, reasons):
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.clear_cache:
+        return run_clear_cache()
     if args.no_cache:
         checks._CACHE_ENABLED = False
     targets = list(args.targets)
@@ -298,6 +305,14 @@ def check_one(owner, repo, number, me):
     findings = checks.run_checks(owner, repo, number, me=me)
     verdict, reasons = decide(findings)
     return f"{owner}/{repo}#{number}", verdict, reasons, findings
+
+
+def run_clear_cache():
+    """Delete the API response cache and report what was removed."""
+    removed = checks.clear_cache()
+    noun = "entry" if removed == 1 else "entries"
+    print(f"cleared {removed} cache {noun} ({checks._cache_dir()})")
+    return 0
 
 
 def run_single(text, args):

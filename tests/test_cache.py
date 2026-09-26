@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from taken import checks
+from taken import checks, cli
 
 
 class Proc:
@@ -136,3 +136,19 @@ def test_concurrent_writes_keep_cache_valid(cache_env, counting_run):
         for i in range(10):
             data = checks.gh_api(f"repos/octo/repo{n}", {"page": str(i)})
             assert data["ok"] is True
+
+
+def test_clear_cache_flag_removes_dir(cache_env, counting_run, tmp_path, capsys):
+    checks.gh_api("repos/octo/repo")
+    checks.gh_api("repos/octo/other")
+    cache_dir = tmp_path / "cache"
+    assert (cache_dir / "v2").is_dir()
+    assert cli.main(["--clear-cache"]) == 0
+    assert not cache_dir.exists()
+    out = capsys.readouterr().out
+    assert f"cleared 2 cache entries ({cache_dir})" in out
+
+
+def test_clear_cache_flag_empty_cache(cache_env, capsys):
+    assert cli.main(["--clear-cache"]) == 0
+    assert "cleared 0 cache entries" in capsys.readouterr().out

@@ -56,6 +56,7 @@ Useful flags:
 - `--limit N`: scan mode checks at most N open issues per repo (default: 20)
 - `--label LABEL`: scan mode only considers open issues carrying this label
 - `--no-cache`: bypass the API response cache
+- `--clear-cache`: delete the API response cache and exit
 - `--version`, `--help`
 
 Exit codes: 0 means GO, 1 means TAKEN, 2 means CAUTION, 3 means something
@@ -77,7 +78,7 @@ A bare `owner/repo` scans the repo automatically: its open issues
 
 API responses are cached for one hour in `~/.cache/taken`
 (override with `TAKEN_CACHE_DIR`), so repeated scans stay cheap.
-`--no-cache` skips the cache.
+`--no-cache` skips the cache; `--clear-cache` deletes it.
 
 ## Discover mode
 
