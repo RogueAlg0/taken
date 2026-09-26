@@ -165,6 +165,11 @@ Three tools:
   good-first-issue style candidates, verified and ranked, each marked with
   its first-time-friendly labels and contribution-welcome signals.
 
+`scan_repo` and `discover_candidates` include `effective_parameters` in every
+response so clients can see the resolved defaults and filters behind the
+results. Their MCP input schemas also describe each optional parameter's
+default.
+
 `taken` is published in the official
 [MCP Registry](https://registry.modelcontextprotocol.io) as
 `io.github.RogueAlg0/taken`.

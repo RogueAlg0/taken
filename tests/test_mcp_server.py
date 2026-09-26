@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from taken import checks
+from taken import checks, discover
 from taken.mcp_server import check_issue, discover_candidates, mcp, scan_repo
 
 
@@ -66,6 +66,37 @@ def test_server_registers_three_tools():
     schemas = {t.name: t.input_schema for t in tools}
     assert schemas["check_issue"]["required"] == ["owner", "repo", "issue_number"]
     assert schemas["check_issue"]["properties"]["issue_number"]["type"] == "integer"
+    scan_properties = schemas["scan_repo"]["properties"]
+    assert scan_properties["limit"]["description"] == "Max open issues to check. Default: 20."
+    assert scan_properties["limit"]["default"] == 20
+    assert scan_properties["label"]["description"] == (
+        "Only consider open issues carrying this label. Default: no label filter."
+    )
+    assert scan_properties["label"]["default"] is None
+    assert scan_properties["me"]["description"] == (
+        "Your GitHub login; your own comments are ignored. Default: none."
+    )
+    assert scan_properties["me"]["default"] is None
+    discover_properties = schemas["discover_candidates"]["properties"]
+    assert discover_properties["limit"]["description"] == ("Max candidates to return. Default: 10.")
+    assert discover_properties["limit"]["default"] == 10
+    assert discover_properties["language"]["description"] == (
+        "Only consider repositories in this language. Default: no language filter."
+    )
+    assert discover_properties["language"]["default"] is None
+    assert discover_properties["label"]["description"] == (
+        "Issue label to search. Default: good first issue, good-first-issue, "
+        "beginner friendly, and help wanted."
+    )
+    assert discover_properties["label"]["default"] is None
+    assert discover_properties["min_stars"]["description"] == (
+        "Only consider repositories with at least this many stars. Default: 0."
+    )
+    assert discover_properties["min_stars"]["default"] == 0
+    assert discover_properties["me"]["description"] == (
+        "Your GitHub login; your own comments are ignored. Default: none."
+    )
+    assert discover_properties["me"]["default"] is None
 
 
 def test_check_issue_go(faked):
@@ -108,11 +139,21 @@ def test_check_issue_carries_friendly_and_welcoming(monkeypatch):
 def test_scan_repo_reports_each_issue(faked):
     payload = scan_repo("octo", "repo", limit=10)
     assert payload["target"] == "octo/repo"
+    assert payload["effective_parameters"] == {"limit": 10, "label": None, "me": None}
     by_target = {r["target"]: r["verdict"] for r in payload["results"]}
     assert by_target == {
         "octo/repo#1": "GO",
         "octo/repo#2": "TAKEN",
         "octo/repo#3": "TAKEN",
+    }
+
+
+def test_scan_repo_echoes_effective_default_parameters(faked):
+    payload = scan_repo("octo", "repo")
+    assert payload["effective_parameters"] == {
+        "limit": 20,
+        "label": None,
+        "me": None,
     }
 
 
@@ -143,8 +184,12 @@ def test_scan_repo_error_dict(monkeypatch):
         raise checks.TakenError("repo gone")
 
     monkeypatch.setattr(checks, "gh_api", boom)
-    payload = scan_repo("octo", "repo")
-    assert payload == {"target": "octo/repo", "error": "repo gone"}
+    payload = scan_repo("octo", "repo", limit=7, label="help wanted", me="octocat")
+    assert payload == {
+        "target": "octo/repo",
+        "effective_parameters": {"limit": 7, "label": "help wanted", "me": "octocat"},
+        "error": "repo gone",
+    }
 
 
 def search_item(number):
@@ -169,9 +214,57 @@ def test_discover_candidates_verifies_and_ranks(monkeypatch):
 
     monkeypatch.setattr(checks, "gh_api", fake)
     payload = discover_candidates(limit=5, label="good first issue")
+    assert payload["effective_parameters"] == {
+        "limit": 5,
+        "language": None,
+        "labels": ["good first issue"],
+        "min_stars": 0,
+        "me": None,
+    }
     assert [r["target"] for r in payload["results"]] == ["octo/repo#1"]
     assert payload["results"][0]["verdict"] == "GO"
     assert payload["results"][0]["score"] >= 0
+
+
+def test_discover_candidates_echoes_effective_default_parameters(monkeypatch):
+    monkeypatch.setattr(discover, "discover", lambda **kwargs: [])
+    payload = discover_candidates()
+    assert payload["effective_parameters"] == {
+        "limit": 10,
+        "language": None,
+        "labels": [
+            "good first issue",
+            "good-first-issue",
+            "beginner friendly",
+            "help wanted",
+        ],
+        "min_stars": 0,
+        "me": None,
+    }
+
+
+def test_discover_candidates_error_echoes_effective_parameters(monkeypatch):
+    def boom(**kwargs):
+        raise checks.TakenError("search unavailable")
+
+    monkeypatch.setattr(discover, "discover", boom)
+    payload = discover_candidates(
+        limit=3,
+        language="Python",
+        label="help wanted",
+        min_stars=50,
+        me="octocat",
+    )
+    assert payload == {
+        "effective_parameters": {
+            "limit": 3,
+            "language": "Python",
+            "labels": ["help wanted"],
+            "min_stars": 50,
+            "me": "octocat",
+        },
+        "error": "search unavailable",
+    }
 
 
 def test_discover_candidates_carries_friendly_and_welcoming(monkeypatch):

@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- MCP `scan_repo` and `discover_candidates` responses now include the
+  effective optional parameters used for the query, and their input schemas
+  document every default.
 - `mcp` is now an optional dependency: plain `taken-gh` installs the CLI
   without the MCP SDK; `pip install taken-gh[mcp]` (or
   `uvx --from "taken-gh[mcp]" taken-mcp`) enables the MCP server.
