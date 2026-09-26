@@ -2,7 +2,10 @@
 
 [![PyPI](https://img.shields.io/pypi/v/taken-gh?cacheSeconds=3600)](https://pypi.org/project/taken-gh/)
 [![CI](https://github.com/RogueAlg0/taken/actions/workflows/ci.yml/badge.svg)](https://github.com/RogueAlg0/taken/actions)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/RogueAlg0/taken/badge)](https://scorecard.dev/viewer/?uri=github.com/RogueAlg0/taken)
+[![SonarCloud Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=RogueAlg0_taken&metric=alert_status)](https://sonarcloud.io/project/overview?id=RogueAlg0_taken)
 [![License: MIT](https://img.shields.io/github/license/RogueAlg0/taken)](LICENSE)
+[![Downloads](https://img.shields.io/pypi/dm/taken-gh)](https://pypi.org/project/taken-gh/)
 <!-- Static python badge: shields' pypi/pyversions reads trove classifiers,
      not requires-python, so it renders "missing" until a release ships with
      the Python classifiers below. -->
