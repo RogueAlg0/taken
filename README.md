@@ -144,8 +144,9 @@ Three tools:
 
 - `check_issue(owner, repo, issue_number, me?)`: GO/TAKEN/CAUTION verdict with
   reasons and full findings for one issue.
-- `scan_repo(owner, repo, limit?, label?, me?)`: verdicts for a repo's open
-  issues, most recently updated first.
+- `scan_repo(owner, repo, limit?, label?, me?)`: the repo's open issues with
+  verdicts, GO first, plus `recommendations` (just the GO targets) and a
+  verdict `summary`.
 - `discover_candidates(limit?, language?, label?, min_stars?, me?)`:
   good-first-issue style candidates, verified and ranked.
 

@@ -105,6 +105,17 @@ def test_scan_repo_reports_each_issue(faked):
     }
 
 
+def test_scan_repo_recommends_go_first(faked):
+    payload = scan_repo("octo", "repo", limit=10)
+    assert [r["target"] for r in payload["results"]] == [
+        "octo/repo#1",
+        "octo/repo#2",
+        "octo/repo#3",
+    ]
+    assert payload["recommendations"] == ["octo/repo#1"]
+    assert payload["summary"] == {"GO": 1, "CAUTION": 0, "TAKEN": 2, "errors": 0}
+
+
 def test_scan_repo_error_dict(monkeypatch):
     def boom(endpoint, params=None):
         raise checks.TakenError("repo gone")

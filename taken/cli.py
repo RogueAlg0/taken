@@ -309,11 +309,14 @@ def run_batch(targets, args):
 
     A bare owner/repo target is scanned automatically: its open issues
     (up to --limit, optionally filtered by --label) are each checked.
+    When any repo was scanned, a GO-candidate recommendation summary is
+    printed at the end.
     Returns 0 when every target produced a verdict, 3 when any target
     failed to parse or its checks errored.
     """
     results = []
     failed = False
+    scanned_repo = False
     for text in targets:
         parsed = parse_target(text)
         if not parsed:
@@ -325,6 +328,7 @@ def run_batch(targets, args):
             failed = True
             continue
         if parsed[0] == "repo":
+            scanned_repo = True
             _, owner, repo = parsed
             try:
                 issues = checks.list_open_issues(owner, repo, limit=args.limit, label=args.label)
@@ -365,6 +369,14 @@ def run_batch(targets, args):
     else:
         for target, verdict, reasons, _findings in results:
             print(format_batch_line(target, verdict, reasons))
+        if scanned_repo and results:
+            gos = [target for target, verdict, _r, _f in results if verdict == GO]
+            print()
+            if gos:
+                noun = "candidate" if len(gos) == 1 else "candidates"
+                print(f"{len(gos)} GO {noun}: " + ", ".join(gos))
+            else:
+                print("no GO candidates in this scan.")
     return 3 if failed else 0
 
 

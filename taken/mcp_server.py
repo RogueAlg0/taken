@@ -38,6 +38,10 @@ def _check_one(owner, repo, number, me=None):
     }
 
 
+# Verdict ordering for scan_repo: best candidates first.
+_VERDICT_RANK = {"GO": 0, "CAUTION": 1, "TAKEN": 2}
+
+
 @mcp.tool()
 def check_issue(owner: str, repo: str, issue_number: int, me: str | None = None) -> dict:
     """Check whether a GitHub issue is already taken.
@@ -66,7 +70,11 @@ def scan_repo(
     label: str | None = None,
     me: str | None = None,
 ) -> dict:
-    """Scan a repository's open issues and report the taken verdict for each.
+    """Scan a repository's open issues and recommend the GO ones.
+
+    Results are ordered GO first, then CAUTION, then TAKEN, so the best
+    candidates to volunteer for come first. `recommendations` lists just
+    the GO targets; `summary` counts each verdict.
 
     Args:
         owner: repository owner login
@@ -92,7 +100,20 @@ def scan_repo(
             )
         except checks.TakenError as exc:
             results.append({"target": f"{issue_owner}/{issue_repo}#{number}", "error": str(exc)})
-    return {"target": f"{owner}/{repo}", "results": results}
+    results.sort(key=lambda r: _VERDICT_RANK.get(r.get("verdict"), 3))
+    summary = {"GO": 0, "CAUTION": 0, "TAKEN": 0, "errors": 0}
+    for item in results:
+        verdict = item.get("verdict")
+        if verdict in summary:
+            summary[verdict] += 1
+        else:
+            summary["errors"] += 1
+    return {
+        "target": f"{owner}/{repo}",
+        "results": results,
+        "recommendations": [r["target"] for r in results if r.get("verdict") == "GO"],
+        "summary": summary,
+    }
 
 
 @mcp.tool()

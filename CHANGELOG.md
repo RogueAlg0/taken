@@ -15,6 +15,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   API endpoint.
 
 ### Added
+- Smarter repo scans: `taken owner/repo` now ends with a GO-candidate
+  recommendation summary ("2 GO candidates: a/b#1, a/b#2", or
+  "no GO candidates in this scan").
+- Smarter MCP `scan_repo`: results are ordered GO first, then CAUTION,
+  then TAKEN, and the payload adds `recommendations` (just the GO
+  targets) plus a verdict `summary`, so agents can pick a candidate
+  without parsing every verdict.
 - MCP Registry publishing is automated: `publish.yml` gained a
   `publish-registry` job that logs in with GitHub OIDC (no stored secrets, no
   device flow) and publishes `server.json` to the official MCP Registry on

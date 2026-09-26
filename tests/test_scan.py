@@ -62,9 +62,25 @@ def test_scan_checks_each_open_issue(monkeypatch, capsys):
     monkeypatch.setattr(checks, "gh_api", make_fake({1: "taken", 2: "go"}, [1, 2]))
     assert main(["octo/repo"]) == 0
     lines = capsys.readouterr().out.strip().splitlines()
-    assert len(lines) == 2  # the PR #99 is filtered out
+    assert len(lines) == 4  # the PR #99 is filtered out; then a GO recommendation
     assert lines[0].startswith("TAKEN   octo/repo#1")
     assert lines[1].startswith("GO      octo/repo#2")
+    assert lines[2] == ""
+    assert lines[3] == "1 GO candidate: octo/repo#2"
+
+
+def test_scan_recommends_multiple_go_candidates(monkeypatch, capsys):
+    monkeypatch.setattr(checks, "gh_api", make_fake({1: "taken", 2: "go", 3: "go"}, [1, 2, 3]))
+    assert main(["octo/repo"]) == 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[-1] == "2 GO candidates: octo/repo#2, octo/repo#3"
+
+
+def test_scan_no_go_candidates_says_so(monkeypatch, capsys):
+    monkeypatch.setattr(checks, "gh_api", make_fake({1: "taken", 2: "taken"}, [1, 2]))
+    assert main(["octo/repo"]) == 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[-1] == "no GO candidates in this scan."
 
 
 def test_scan_issue_error_does_not_stop_scan(monkeypatch, capsys):
@@ -79,8 +95,9 @@ def test_scan_limit(monkeypatch, capsys):
     monkeypatch.setattr(checks, "gh_api", make_fake({1: "taken", 2: "go"}, [1, 2]))
     assert main(["--limit", "1", "octo/repo"]) == 0
     lines = capsys.readouterr().out.strip().splitlines()
-    assert len(lines) == 1
+    assert len(lines) == 3
     assert lines[0].startswith("TAKEN")
+    assert lines[2] == "no GO candidates in this scan."
 
 
 def test_scan_label_filter(monkeypatch, capsys):
@@ -95,7 +112,9 @@ def test_scan_label_filter(monkeypatch, capsys):
     assert main(["--label", "good first issue", "octo/repo"]) == 0
     assert seen["labels"] == "good first issue"
     lines = capsys.readouterr().out.strip().splitlines()
-    assert len(lines) == 1 and lines[0].startswith("GO")
+    assert len(lines) == 3
+    assert lines[0].startswith("GO")
+    assert lines[2] == "1 GO candidate: octo/repo#2"
 
 
 def test_scan_no_open_issues(monkeypatch, capsys):
