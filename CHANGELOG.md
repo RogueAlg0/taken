@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-26
+
 ### Fixed
 - Timeline and comment scans now page through up to 5 pages (500 items)
   instead of trusting the first 100 results: a linked PR or a claimant
