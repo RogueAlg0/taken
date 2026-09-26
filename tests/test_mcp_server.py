@@ -40,6 +40,8 @@ def make_fake(states, labels_map=None):
             raise checks.NotFoundError(endpoint)
         if endpoint.startswith("repos/octo/repo/pulls"):
             return []
+        if endpoint.startswith("repos/octo/repo/commits"):
+            return []
         if endpoint == "repos/octo/repo":
             now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             return {"pushed_at": now, "stargazers_count": 4}
@@ -89,10 +91,11 @@ def test_server_registers_three_tools():
         "beginner friendly, and help wanted."
     )
     assert discover_properties["label"]["default"] is None
-    assert discover_properties["min_stars"]["description"] == (
-        "Only consider repositories with at least this many stars. Default: 0."
+    assert discover_properties["min_contributors"]["description"] == (
+        "Only consider repositories with at least this many contributors "
+        "in the last 90 days. Default: 0."
     )
-    assert discover_properties["min_stars"]["default"] == 0
+    assert discover_properties["min_contributors"]["default"] == 0
     assert discover_properties["me"]["description"] == (
         "Your GitHub login; your own comments are ignored. Default: none."
     )
@@ -218,7 +221,7 @@ def test_discover_candidates_verifies_and_ranks(monkeypatch):
         "limit": 5,
         "language": None,
         "labels": ["good first issue"],
-        "min_stars": 0,
+        "min_contributors": 0,
         "me": None,
     }
     assert [r["target"] for r in payload["results"]] == ["octo/repo#1"]
@@ -238,7 +241,7 @@ def test_discover_candidates_echoes_effective_default_parameters(monkeypatch):
             "beginner friendly",
             "help wanted",
         ],
-        "min_stars": 0,
+        "min_contributors": 0,
         "me": None,
     }
 
@@ -252,7 +255,7 @@ def test_discover_candidates_error_echoes_effective_parameters(monkeypatch):
         limit=3,
         language="Python",
         label="help wanted",
-        min_stars=50,
+        min_contributors=50,
         me="octocat",
     )
     assert payload == {
@@ -260,7 +263,7 @@ def test_discover_candidates_error_echoes_effective_parameters(monkeypatch):
             "limit": 3,
             "language": "Python",
             "labels": ["help wanted"],
-            "min_stars": 50,
+            "min_contributors": 50,
             "me": "octocat",
         },
         "error": "search unavailable",

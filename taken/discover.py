@@ -89,7 +89,7 @@ def score_candidate(findings, updated_at, engaged):
     return points, why
 
 
-def _verify_candidate(owner, repo, number, item, min_stars, me):
+def _verify_candidate(owner, repo, number, item, min_contributors, me):
     """Run the full check on one candidate.
 
     Kept separate so the pool can be verified concurrently; each call only
@@ -107,7 +107,7 @@ def _verify_candidate(owner, repo, number, item, min_stars, me):
     verdict, reasons = decide(findings)
     if verdict != GO:
         return None, None
-    if (findings["repo_health"].get("stars") or 0) < min_stars:
+    if (findings["repo_health"].get("contributors") or 0) < min_contributors:
         return None, None
     comments = checks.fetch_comments(owner, repo, number)
     engaged = maintainer_engaged(findings["issue"], comments, me=me)
@@ -185,7 +185,7 @@ def discover(
     limit=10,
     language=None,
     label=None,
-    min_stars=0,
+    min_contributors=0,
     me=None,
     jobs=DEFAULT_JOBS,
     on_progress=None,
@@ -220,7 +220,7 @@ def discover(
     workers = max(1, jobs)
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
-            pool.submit(_verify_candidate, owner, repo, number, item, min_stars, me): (
+            pool.submit(_verify_candidate, owner, repo, number, item, min_contributors, me): (
                 owner,
                 repo,
                 number,

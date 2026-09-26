@@ -159,9 +159,12 @@ def discover_candidates(
             "beginner friendly, and help wanted."
         ),
     ] = None,
-    min_stars: Annotated[
+    min_contributors: Annotated[
         int,
-        Field(description="Only consider repositories with at least this many stars. Default: 0."),
+        Field(
+            description="Only consider repositories with at least this many "
+            "contributors in the last 90 days. Default: 0."
+        ),
     ] = 0,
     me: Annotated[
         str | None,
@@ -179,14 +182,15 @@ def discover_candidates(
         limit: max candidates to return (default 10)
         language: only consider repos in this language
         label: issue label to search (defaults to good-first-issue style labels)
-        min_stars: only consider repos with at least this many stars
+        min_contributors: only consider repos with at least this many contributors
+            in the last 90 days
         me: your GitHub login; your own comments are ignored in the claimant scan
     """
     effective_parameters = {
         "limit": limit,
         "language": language,
         "labels": [label] if label else list(discover.SEARCH_LABELS),
-        "min_stars": min_stars,
+        "min_contributors": min_contributors,
         "me": me,
     }
     try:
@@ -194,7 +198,7 @@ def discover_candidates(
             limit=limit,
             language=language,
             label=label,
-            min_stars=min_stars,
+            min_contributors=min_contributors,
             me=me,
             jobs=discover.DEFAULT_JOBS,
             on_progress=None,

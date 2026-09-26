@@ -23,6 +23,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   many entries were cleared. Works as a standalone action:
   `taken --clear-cache` clears and exits.
 
+### Changed
+- Repo health now tracks contributors instead of stars: `repo_health` reports
+  `contributors` (distinct commit authors in the last 90 days, bots excluded)
+  and `contributors_window_days` instead of `stars`. `--discover`'s
+  `--min-stars` flag is now `--min-contributors`, and the MCP
+  `discover_candidates` parameter `min_stars` is now `min_contributors`.
+  Star counts accumulate forever; contributor breadth shows who is actually
+  landing changes right now.
+
 ### Fixed
 - The web console's `taken --version` string in docs/py/webshim.py is
   bumped to 0.7.0 (it was hardcoded to 0.6.0).

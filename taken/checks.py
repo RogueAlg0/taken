@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 API_TIMEOUT = 60
 HEALTH_WINDOW_DAYS = 30
+CONTRIBUTORS_WINDOW_DAYS = 90
 CACHE_TTL_SECONDS = 3600
 
 # Timeline and comment scans page through the API instead of trusting the
@@ -554,8 +555,42 @@ def list_open_issues(owner, repo, limit=20, label=None):
     return found
 
 
+def count_recent_contributors(owner, repo, days=CONTRIBUTORS_WINDOW_DAYS):
+    """Count distinct people who landed commits in the last `days` days.
+
+    Bots are excluded. Only the most recent 300 commits are scanned, so for
+    very active repos this is a lower bound, not an exact census. Contributor
+    breadth is a healthier signal than star count: stars accumulate forever,
+    while contributors show who is actually landing changes right now.
+    """
+    endpoint = f"repos/{owner}/{repo}/commits"
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    authors = set()
+    for page in (1, 2, 3):
+        commits = _require_list(
+            gh_api(endpoint, {"since": since, "per_page": "100", "page": str(page)}),
+            endpoint,
+        )
+        if not commits:
+            break
+        for commit in commits:
+            author = commit.get("author") or {}
+            login = author.get("login") or ""
+            if login:
+                if login.endswith("[bot]"):
+                    continue
+                authors.add(login.lower())
+            else:
+                email = ((commit.get("commit") or {}).get("author") or {}).get("email") or ""
+                if email:
+                    authors.add(email.lower())
+        if len(commits) < 100:
+            break
+    return len(authors)
+
+
 def check_repo_health(owner, repo, window_days=HEALTH_WINDOW_DAYS):
-    """Check recent pushes and merged PRs as a rough activity signal."""
+    """Check recent pushes, merged PRs, and contributor breadth as activity signals."""
     endpoint = f"repos/{owner}/{repo}"
     data = _require_dict(gh_api(endpoint), endpoint)
     pushed_at = data.get("pushed_at") or ""
@@ -595,7 +630,8 @@ def check_repo_health(owner, repo, window_days=HEALTH_WINDOW_DAYS):
         "pushed_at": pushed_at[:10],
         "pushed_recently": pushed_recently,
         "recent_merges": recent_merges,
-        "stars": data.get("stargazers_count", 0),
+        "contributors": count_recent_contributors(owner, repo),
+        "contributors_window_days": CONTRIBUTORS_WINDOW_DAYS,
     }
 
 

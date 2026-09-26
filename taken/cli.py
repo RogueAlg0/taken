@@ -76,11 +76,11 @@ def build_parser():
         help="discover: only consider repos in this language",
     )
     parser.add_argument(
-        "--min-stars",
+        "--min-contributors",
         type=int,
         default=0,
         metavar="N",
-        help="discover: only consider repos with at least N stars",
+        help="discover: only consider repos with at least N contributors in the last 90 days",
     )
     parser.add_argument(
         "--jobs",
@@ -160,7 +160,7 @@ def format_human(findings, verdict, reasons):
     lines.append(
         f"  repo health: pushed {health['pushed_at'] or 'unknown'}, "
         f"{health['recent_merges']} PRs merged in last 30 days, "
-        f"{health['stars']} stars"
+        f"{health['contributors']} contributors in last 90 days"
     )
     friendly = checks.friendly_labels(findings)
     if friendly:
@@ -243,7 +243,7 @@ def run_discover(args):
             limit=args.limit,
             language=args.language,
             label=args.label,
-            min_stars=args.min_stars,
+            min_contributors=args.min_contributors,
             me=args.me,
             jobs=args.jobs,
             on_progress=on_progress if bar is not None else None,

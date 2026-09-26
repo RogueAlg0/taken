@@ -121,7 +121,7 @@ def format_human(findings, verdict, reasons):
     lines.append(
         f"  repo health: pushed {health['pushed_at'] or 'unknown'}, "
         f"{health['recent_merges']} PRs merged in last 30 days, "
-        f"{health['stars']} stars"
+        f"{health['contributors']} contributors in last 90 days"
     )
     friendly = checks.friendly_labels(findings)
     if friendly:
@@ -148,7 +148,7 @@ doing live checks against GitHub's public API. No login, nothing installed.
   taken owner/repo --limit 3 --label "good first issue"
 
   taken --discover --limit 3   (live search + full verification)
-  taken --discover --language python --min-stars 50
+  taken --discover --language python --min-contributors 3
 
 offline (no API calls):
   taken --version
@@ -215,7 +215,7 @@ def _score_candidate(findings, updated_at, engaged):
     return points, why
 
 
-def run_discover_web(limit, language, label, min_stars, me):
+def run_discover_web(limit, language, label, min_contributors, me):
     """Live candidate discovery: search GitHub, verify each, rank GO ones."""
     updated_after = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
     labels = [label] if label else WEB_DISCOVER_LABELS
@@ -251,7 +251,7 @@ def run_discover_web(limit, language, label, min_stars, me):
         verdict, _reasons = decide(findings)
         if verdict != GO:
             continue
-        if (findings["repo_health"].get("stars") or 0) < min_stars:
+        if (findings["repo_health"].get("contributors") or 0) < min_contributors:
             continue
         try:
             comments = checks.fetch_comments(owner, repo, number)
@@ -352,15 +352,15 @@ def run_command(line):
         dlabel_match = re.search(r'--label\s+"([^"]+)"|--label\s+(\S+)', discover_rest)
         if dlabel_match:
             dlabel = dlabel_match.group(1) or dlabel_match.group(2)
-        dstars = 0
-        dstars_match = re.search(r"--min-stars\s+(\d+)", discover_rest)
-        if dstars_match:
-            dstars = int(dstars_match.group(1))
+        dcontributors = 0
+        dcontributors_match = re.search(r"--min-contributors\s+(\d+)", discover_rest)
+        if dcontributors_match:
+            dcontributors = int(dcontributors_match.group(1))
         dme = None
         dme_match = re.search(r"--me\s+(\S+)", discover_rest)
         if dme_match:
             dme = dme_match.group(1)
-        return run_discover_web(dlimit, dlang, dlabel, dstars, dme)
+        return run_discover_web(dlimit, dlang, dlabel, dcontributors, dme)
     m = re.match(r"^taken\s+(.+)$", line, re.I)
     if not m:
         return 'unknown command. Try "taken --help".'

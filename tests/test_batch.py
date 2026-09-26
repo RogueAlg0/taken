@@ -36,6 +36,8 @@ def make_fake(state):
             raise checks.NotFoundError(endpoint)
         if endpoint.startswith("repos/octo/repo/pulls"):
             return []
+        if endpoint.startswith("repos/octo/repo/commits"):
+            return []
         if endpoint == "repos/octo/repo":
             now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             return {"pushed_at": now, "stargazers_count": 4}

@@ -27,7 +27,8 @@ def make_findings(labels=(), contributing=False, merges=0):
             "pushed_at": "2026-09-26",
             "pushed_recently": True,
             "recent_merges": merges,
-            "stars": 10,
+            "contributors": 3,
+            "contributors_window_days": 90,
         },
     }
 

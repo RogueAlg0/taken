@@ -88,7 +88,7 @@ piggybacks on GitHub's issue search API (the same source the web
 aggregators use) for raw candidates, then runs taken's full verification
 on each one and ranks the survivors. Only GO verdicts make the list.
 
-    taken --discover --language python --min-stars 50 --limit 10
+    taken --discover --language python --min-contributors 3 --limit 10
       6  octocat/hello-world#42  maintainer replied; updated 1d ago; repo pushed 0d ago
       4  octocat/other-repo#7    updated 3d ago; repo pushed 2d ago
 
@@ -161,7 +161,7 @@ Three tools:
   verdicts, GO first, plus `recommendations` (just the GO targets), a
   verdict `summary`, and per-issue `friendly_labels` / `welcoming` markers
   so the safest issues to adopt stand out.
-- `discover_candidates(limit?, language?, label?, min_stars?, me?)`:
+- `discover_candidates(limit?, language?, label?, min_contributors?, me?)`:
   good-first-issue style candidates, verified and ranked, each marked with
   its first-time-friendly labels and contribution-welcome signals.
 
