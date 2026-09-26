@@ -23,6 +23,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   round-robin from each label's results instead of stopping once the first
   label fills the verify pool. The labels searched and their raw candidate
   counts are printed to stderr.
+- Web console refreshed: the vendored `docs/py/checks.py` / `verdict.py`
+  are byte-copies of main again (they were stale, predating the
+  first-time-friendly markers). Web `--discover` lines, repo-scan GO
+  recommendations, and single-issue output now show the same
+  first-time-friendly / welcoming markers as the CLI, and the web
+  maintainer-engagement heuristic uses comment `author_association`
+  (OWNER/MEMBER/COLLABORATOR only, `--me` excluded) like the CLI.
 - `gh` transport is honest about failures: rate-limit output (HTTP 429 /
   "rate limit exceeded") raises a dedicated `RateLimitError` with the reset
   time when `gh` reports one, and is never retried. Transient 5xx errors get

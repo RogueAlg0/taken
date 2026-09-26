@@ -8,7 +8,8 @@ every heuristic, every verdict rule is the real code.
 
 Notes for maintainers:
 - checks.py / verdict.py in this directory are byte-copies of main at the
-  time of the Pyodide-console PR. Re-copy them when the pipeline changes.
+  time of the last refresh (see git log for docs/py/checks.py). Re-copy
+  them when the pipeline changes; verify with diff.
 - MAX_SCAN_PAGES is capped at 1 here to respect GitHub's unauthenticated
   budget (60 req/hour per visitor). The CLI scans deeper.
 - Live discover mirrors taken/discover.py but sequential and budget-capped:
@@ -122,6 +123,12 @@ def format_human(findings, verdict, reasons):
         f"{health['recent_merges']} PRs merged in last 30 days, "
         f"{health['stars']} stars"
     )
+    friendly = checks.friendly_labels(findings)
+    if friendly:
+        lines.append(f"  first-time friendly: {', '.join(friendly)}")
+    welcoming = checks.welcoming_signals(findings)
+    if welcoming:
+        lines.append(f"  welcoming: {', '.join(welcoming)}")
     lines.append("")
     lines.append("why:")
     for reason in reasons:
@@ -169,12 +176,21 @@ def _days_ago(iso_ts):
     return (datetime.now(timezone.utc) - dt).days
 
 
-def _maintainer_engaged(issue, comments):
-    """Someone other than the author, not a bot, commented."""
+# Mirrors taken/discover.py::MAINTAINER_ASSOCIATIONS: only these comment
+# author_associations count as maintainer engagement.
+MAINTAINER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
+
+def _maintainer_engaged(issue, comments, me=None):
+    """A maintainer (OWNER/MEMBER/COLLABORATOR), not the author, bot, or --me, commented."""
     author = issue.get("author")
     for comment in comments:
         login = (comment.get("user") or {}).get("login") or ""
-        if login and login != author and not login.endswith("[bot]"):
+        if not login or login == author or login.endswith("[bot]"):
+            continue
+        if me and login.lower() == me.lower():
+            continue
+        if comment.get("author_association") in MAINTAINER_ASSOCIATIONS:
             return True
     return False
 
@@ -241,9 +257,12 @@ def run_discover_web(limit, language, label, min_stars, me):
             comments = checks.fetch_comments(owner, repo, number)
         except checks.TakenError:
             comments = []
-        engaged = _maintainer_engaged(findings["issue"], comments)
+        engaged = _maintainer_engaged(findings["issue"], comments, me=me)
         points, why = _score_candidate(findings, updated_at, engaged)
-        ranked.append((points, updated_at, f"{owner}/{repo}#{number}", why))
+        markers = "".join(
+            f" [{m}]" for m in checks.friendly_labels(findings) + checks.welcoming_signals(findings)
+        )
+        ranked.append((points, updated_at, f"{owner}/{repo}#{number}", why, markers))
     if not ranked:
         return "no GO candidates found live. Try again later or widen with --language/--label."
     ranked.sort(key=lambda r: (r[0], r[1]), reverse=True)
@@ -252,8 +271,8 @@ def run_discover_web(limit, language, label, min_stars, me):
         "live search + full verification, ranked by maintainer responsiveness.",
         "",
     ]
-    for points, _updated_at, target, why in ranked:
-        lines.append(f"{points:3}  {target}  {'; '.join(why)}")
+    for points, _updated_at, target, why, markers in ranked:
+        lines.append(f"{points:3}  {target}  {'; '.join(why)}{markers}")
     lines.append("")
     lines.append(f"{len(ranked)} GO candidate(s). Only GO verdicts are ranked.")
     return "\n".join(lines)
@@ -296,10 +315,14 @@ def run_repo_scan(owner, repo, limit, label, me):
         first = reasons[0] if reasons else ""
         lines.append(f"{verdict:7} {issue_owner}/{issue_repo}#{number}  {first}")
         if verdict == "GO":
-            gos.append(f"{issue_owner}/{issue_repo}#{number}")
+            gos.append((f"{issue_owner}/{issue_repo}#{number}", checks.friendly_labels(findings)))
     lines.append("")
     if gos:
-        lines.append(f"{len(gos)} GO candidate(s): " + ", ".join(gos))
+        # First-time-friendly issues first: the safest ones to adopt.
+        gos.sort(key=lambda item: (not item[1], item[0]))
+        noun = "candidate" if len(gos) == 1 else "candidates"
+        parts = [f"{target} ({', '.join(labels)})" if labels else target for target, labels in gos]
+        lines.append(f"{len(gos)} GO {noun}: " + ", ".join(parts))
     else:
         lines.append("no GO candidates in this scan.")
     return "\n".join(lines)
@@ -314,7 +337,7 @@ def run_command(line):
     if low in ("taken --help", "help"):
         return HELP
     if low == "taken --version":
-        return "taken 0.5.0 (Pyodide build: taken's real Python code, running in your browser)"
+        return "taken 0.6.0 (Pyodide build: taken's real Python code, running in your browser)"
     if low.startswith("taken --discover"):
         discover_rest = low[len("taken --discover") :].strip()
         dlimit = WEB_DISCOVER_DEFAULT
