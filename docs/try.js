@@ -303,8 +303,9 @@
     reasons.forEach(function (r) { out.push("  - " + esc(r)); });
     out.push("");
     out.push('<span class="dim">live check via GitHub\'s public API, no login. ' +
-      "Simplified port of taken " + esc(window.TAKEN_VERSION || "") + "; " +
-      "the CLI checks more (caching, full timeline pages).</span>");
+      "Simplified port of taken " + esc(window.TAKEN_VERSION || "") + ": " +
+      "scans the first 100 timeline events and comments (API budget); " +
+      "the CLI scans up to 5 pages and caches.</span>");
     return out.join("\n");
   }
 

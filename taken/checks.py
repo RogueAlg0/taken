@@ -20,6 +20,11 @@ API_TIMEOUT = 60
 HEALTH_WINDOW_DAYS = 30
 CACHE_TTL_SECONDS = 3600
 
+# Timeline and comment scans page through the API instead of trusting the
+# first 100 results: on a busy issue a linked PR or a claimant comment can
+# hide on a later page, which would silently flip a verdict to GO.
+MAX_SCAN_PAGES = 5
+
 # Set to False (via --no-cache) to bypass the response cache.
 _CACHE_ENABLED = True
 
@@ -235,7 +240,7 @@ def gh_api(endpoint, params=None):
     if proc.returncode != 0:
         err = (proc.stderr or "").strip()
         if "404" in err or "Not Found" in err:
-            raise NotFoundError(endpoint)
+            raise NotFoundError(f"not found: {endpoint}")
         raise TakenError(f"`gh api {endpoint}` failed: {err[:300]}")
     try:
         data = json.loads(proc.stdout)
@@ -244,6 +249,24 @@ def gh_api(endpoint, params=None):
     if _CACHE_ENABLED:
         _cache_write(key, data)
     return data
+
+
+def _paged_list(endpoint, params=None):
+    """GET every page of a list endpoint, up to MAX_SCAN_PAGES.
+
+    Stops early on a short page. Each page goes through _require_list, so a
+    bad page errors out instead of silently truncating the scan.
+    """
+    items = []
+    for page in range(1, MAX_SCAN_PAGES + 1):
+        batch = _require_list(
+            gh_api(endpoint, {**(params or {}), "per_page": "100", "page": str(page)}),
+            endpoint,
+        )
+        items.extend(batch)
+        if len(batch) < 100:
+            break
+    return items
 
 
 def check_issue(owner, repo, number):
@@ -270,7 +293,7 @@ def check_timeline(owner, repo, number):
     reason this tool exists.
     """
     endpoint = f"repos/{owner}/{repo}/issues/{number}/timeline"
-    events = _require_list(gh_api(endpoint, {"per_page": "100"}), endpoint)
+    events = _paged_list(endpoint)
     linked = []
     seen = set()
     for event in events:
@@ -330,7 +353,7 @@ def find_claimant_hits(comments, me=None):
 def fetch_comments(owner, repo, number):
     """Fetch raw issue comments (cached like everything else)."""
     endpoint = f"repos/{owner}/{repo}/issues/{number}/comments"
-    return _require_list(gh_api(endpoint, {"per_page": "100"}), endpoint)
+    return _paged_list(endpoint)
 
 
 def check_claimants(owner, repo, number, me=None):

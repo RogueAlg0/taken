@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Timeline and comment scans now page through up to 5 pages (500 items)
+  instead of trusting the first 100 results: a linked PR or a claimant
+  comment hiding on a later page of a busy issue could previously flip a
+  verdict to GO silently.
+- 404 errors now say `not found: <endpoint>` instead of printing the bare
+  API endpoint.
+
 ### Added
 - MCP Registry publishing is automated: `publish.yml` gained a
   `publish-registry` job that logs in with GitHub OIDC (no stored secrets, no
