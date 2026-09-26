@@ -157,6 +157,12 @@ def format_human(findings, verdict, reasons):
         f"{health['recent_merges']} PRs merged in last 30 days, "
         f"{health['stars']} stars"
     )
+    friendly = checks.friendly_labels(findings)
+    if friendly:
+        lines.append(f"  first-time friendly: {', '.join(friendly)}")
+    welcoming = checks.welcoming_signals(findings)
+    if welcoming:
+        lines.append(f"  welcoming: {', '.join(welcoming)}")
     lines.append("")
     lines.append("why:")
     for reason in reasons:

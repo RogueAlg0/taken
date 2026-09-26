@@ -35,6 +35,8 @@ def _check_one(owner, repo, number, me=None):
         "verdict": verdict,
         "reasons": reasons,
         "findings": findings,
+        "friendly_labels": checks.friendly_labels(findings),
+        "welcoming": checks.welcoming_signals(findings),
     }
 
 
@@ -49,6 +51,10 @@ def check_issue(owner: str, repo: str, issue_number: int, me: str | None = None)
     Verdicts: GO (free to volunteer), TAKEN (spoken for: closed, open PR,
     or assignee), CAUTION (soft signal: someone expressed interest, the repo
     bans AI contributions, or the repo looks stale).
+
+    The payload also carries `friendly_labels` (first-time-contributor
+    labels on the issue) and `welcoming` (repo-level signs contributions
+    are welcome), the same markers `scan_repo` returns.
 
     Args:
         owner: repository owner login

@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `--discover` ranking: candidates with equal scores are now ordered
   most-recently-updated first, matching the documented "score desc, then
   recency desc" order (the old double sort left ties oldest-first).
+- Single-issue output (`taken owner/repo#123`) now prints the
+  first-time-friendly markers (`first-time friendly:`, `welcoming:`) when
+  present, matching what `--discover` lines and the MCP tools already show.
+- MCP `check_issue` now returns top-level `friendly_labels` and `welcoming`,
+  consistent with `scan_repo` and `discover_candidates`.
 
 ### Added
 - First-time-friendly recommendations: `taken --discover` lines and MCP

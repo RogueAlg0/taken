@@ -96,6 +96,15 @@ def test_check_issue_returns_error_dict(monkeypatch):
     assert payload == {"target": "octo/repo#1", "error": "network down"}
 
 
+def test_check_issue_carries_friendly_and_welcoming(monkeypatch):
+    monkeypatch.setattr(
+        checks, "gh_api", make_fake({1: "go"}, labels_map={1: ["good first issue", "bug"]})
+    )
+    payload = check_issue("octo", "repo", 1)
+    assert payload["friendly_labels"] == ["good first issue"]
+    assert payload["welcoming"] == []  # no CONTRIBUTING.md in this fake
+
+
 def test_scan_repo_reports_each_issue(faked):
     payload = scan_repo("octo", "repo", limit=10)
     assert payload["target"] == "octo/repo"
