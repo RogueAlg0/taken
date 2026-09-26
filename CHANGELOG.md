@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.5.0] - 2026-09-26
+
+### Added
+- MCP server: `taken-mcp` exposes taken as tools for coding agents
+  (`check_issue`, `scan_repo`, `discover_candidates`) over stdio. Run it with
+  `uvx --from taken-gh taken-mcp`; like the CLI it uses your own `gh` login
+  and only makes read-only API calls.
+- `server.json` registry metadata for the official MCP registry
+  (`io.github.RogueAlg0/taken`).
+
 ## [0.4.1] - 2026-09-26
 
 ### Fixed

@@ -1,6 +1,6 @@
 [project]
 name = "taken-gh"
-version = "0.4.1"
+version = "0.5.0"
 description = "Check whether a GitHub issue is already taken before you volunteer for it."
 readme = "README.md"
 license = { text = "MIT" }
@@ -10,10 +10,12 @@ keywords = ["github", "cli", "open-source"]
 urls = { Homepage = "https://roguealg0.github.io/taken/", Repository = "https://github.com/RogueAlg0/taken" }
 dependencies = [
     "tqdm>=4.66",
+    "mcp>=2.0,<3",
 ]
 
 [project.scripts]
 taken = "taken.cli:main"
+taken-mcp = "taken.mcp_server:main"
 
 [dependency-groups]
 dev = [

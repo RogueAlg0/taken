@@ -1,0 +1,150 @@
+"""MCP server for taken.
+
+Exposes taken's issue checks as tools so coding agents can ask
+"is this issue taken?" before volunteering for work.
+
+Run with the ``taken-mcp`` console script (stdio transport). The server
+inherits the invoker's environment, so ``gh`` must be installed and
+authenticated, exactly like the ``taken`` CLI.
+
+Never print to stdout here: it carries the JSON-RPC stream. Logs go to
+stderr only.
+"""
+
+import sys
+
+from mcp.server import MCPServer
+
+from taken import __version__, checks, discover
+from taken.verdict import decide
+
+mcp = MCPServer(
+    "taken",
+    title="taken",
+    description="Check whether a GitHub issue is already taken before volunteering for it.",
+    version=__version__,
+)
+
+
+def _check_one(owner, repo, number, me=None):
+    """Run the full check suite on one issue; return the tool payload."""
+    findings = checks.run_checks(owner, repo, number, me=me)
+    verdict, reasons = decide(findings)
+    return {
+        "target": f"{owner}/{repo}#{number}",
+        "verdict": verdict,
+        "reasons": reasons,
+        "findings": findings,
+    }
+
+
+@mcp.tool()
+def check_issue(owner: str, repo: str, issue_number: int, me: str | None = None) -> dict:
+    """Check whether a GitHub issue is already taken.
+
+    Verdicts: GO (free to volunteer), TAKEN (spoken for: closed, open PR,
+    or assignee), CAUTION (soft signal: someone expressed interest, the repo
+    bans AI contributions, or the repo looks stale).
+
+    Args:
+        owner: repository owner login
+        repo: repository name
+        issue_number: issue number to check
+        me: your GitHub login; your own comments are ignored in the claimant scan
+    """
+    try:
+        return _check_one(owner, repo, issue_number, me=me)
+    except checks.TakenError as exc:
+        return {"target": f"{owner}/{repo}#{issue_number}", "error": str(exc)}
+
+
+@mcp.tool()
+def scan_repo(
+    owner: str,
+    repo: str,
+    limit: int = 20,
+    label: str | None = None,
+    me: str | None = None,
+) -> dict:
+    """Scan a repository's open issues and report the taken verdict for each.
+
+    Args:
+        owner: repository owner login
+        repo: repository name
+        limit: max open issues to check (default 20)
+        label: only consider open issues carrying this label
+        me: your GitHub login; your own comments are ignored in the claimant scan
+    """
+    try:
+        issues = checks.list_open_issues(owner, repo, limit=limit, label=label)
+    except checks.TakenError as exc:
+        return {"target": f"{owner}/{repo}", "error": str(exc)}
+    results = []
+    for issue_owner, issue_repo, number in issues:
+        try:
+            payload = _check_one(issue_owner, issue_repo, number, me=me)
+            results.append(
+                {
+                    "target": payload["target"],
+                    "verdict": payload["verdict"],
+                    "reasons": payload["reasons"],
+                }
+            )
+        except checks.TakenError as exc:
+            results.append({"target": f"{issue_owner}/{issue_repo}#{number}", "error": str(exc)})
+    return {"target": f"{owner}/{repo}", "results": results}
+
+
+@mcp.tool()
+def discover_candidates(
+    limit: int = 10,
+    language: str | None = None,
+    label: str | None = None,
+    min_stars: int = 0,
+    me: str | None = None,
+) -> dict:
+    """Discover top open-source contribution candidates.
+
+    Searches GitHub for good-first-issue style issues, runs taken's full
+    verification on each, and returns the ranked candidates.
+
+    Args:
+        limit: max candidates to return (default 10)
+        language: only consider repos in this language
+        label: issue label to search (defaults to good-first-issue style labels)
+        min_stars: only consider repos with at least this many stars
+        me: your GitHub login; your own comments are ignored in the claimant scan
+    """
+    try:
+        results = discover.discover(
+            limit=limit,
+            language=language,
+            label=label,
+            min_stars=min_stars,
+            me=me,
+            jobs=discover.DEFAULT_JOBS,
+            on_progress=None,
+        )
+    except checks.TakenError as exc:
+        return {"error": str(exc)}
+    return {
+        "results": [
+            {
+                "target": item["target"],
+                "score": item["score"],
+                "why": item["why"],
+                "verdict": item["verdict"],
+                "reasons": item["reasons"],
+            }
+            for item in results
+        ]
+    }
+
+
+def main():
+    mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    print("taken-mcp speaks JSON-RPC on stdio; launch it from an MCP client.", file=sys.stderr)
+    sys.exit(2)

@@ -1,5 +1,7 @@
 # taken?
 
+<!-- mcp-name: io.github.RogueAlg0/taken -->
+
 `taken?` answers one question before you volunteer for a GitHub issue: is it
 already taken?
 
@@ -106,6 +108,37 @@ stays script-friendly.
   - `ai_policy`: `verdict` (`ban`, `disclosure-required`, or `none-found`),
     `snippet`, `source`
   - `repo_health`: `pushed_at`, `pushed_recently`, `recent_merges`, `stars`
+
+## MCP server
+
+`taken` also ships as an MCP server, so coding agents can check issues with a
+tool call instead of shelling out to the CLI. It needs the same setup: `gh`
+installed and authenticated, and it only makes read-only API calls through
+your own login.
+
+Run it directly:
+
+    uvx --from taken-gh taken-mcp
+
+Or add it to your MCP client config:
+
+    {
+      "mcpServers": {
+        "taken": {
+          "command": "uvx",
+          "args": ["--from", "taken-gh", "taken-mcp"]
+        }
+      }
+    }
+
+Three tools:
+
+- `check_issue(owner, repo, issue_number, me?)`: GO/TAKEN/CAUTION verdict with
+  reasons and full findings for one issue.
+- `scan_repo(owner, repo, limit?, label?, me?)`: verdicts for a repo's open
+  issues, most recently updated first.
+- `discover_candidates(limit?, language?, label?, min_stars?, me?)`:
+  good-first-issue style candidates, verified and ranked.
 
 ## Examples
 
