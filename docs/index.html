@@ -173,14 +173,14 @@ always prints its evidence so you can judge for yourself.</p>
     '  taken owner/repo#123\n' +
     '  taken https://github.com/owner/repo/issues/123\n' +
     '  taken owner/repo#123 --me mylogin   (ignore your own comments)\n\n' +
-    'other commands:\n' +
-    '  taken --discover --limit 3   (demo data, not live)\n' +
+    'offline (no API calls):\n' +
+    '  taken --discover --limit 3   (sample output, not live)\n' +
     '  taken --version\n' +
     '  clear</span>';
 
   var DISCOVER_DEMO =
     'taken? --discover\n' +
-    '<span class="dim">sample output from a real run (yours will differ).</span>\n\n' +
+    '<span class="dim">offline sample from a real run, not a live check.</span>\n\n' +
     '      6  FasterXML/jackson-datatypes-collections#2  maintainer replied; updated 0d ago; repo pushed 1d ago\n' +
     '      6  padok-team/burrito#42  maintainer replied; updated 0d ago; repo pushed 1d ago\n' +
     '      6  stefankueng/grepWin#618  maintainer replied; updated 0d ago; repo pushed 0d ago\n\n' +
@@ -196,12 +196,7 @@ always prints its evidence so you can judge for yourself.</p>
     if (key === 'taken --help' || key === 'help') { print(HELP); return; }
     if (key === 'taken --version') { print('taken 0.5.0 (live web port)'); return; }
     if (key.indexOf('taken --discover') === 0) {
-      print('<span class="dim">checking...</span>');
-      var dSpinner = body.lastChild;
-      setTimeout(function () {
-        if (dSpinner.parentNode === body) body.removeChild(dSpinner);
-        print(DISCOVER_DEMO);
-      }, 450);
+      print(DISCOVER_DEMO);
       return;
     }
     var m = cmd.match(/^taken\s+(.+)$/i);
@@ -230,9 +225,7 @@ always prints its evidence so you can judge for yourself.</p>
     });
   }
 
-  print('<span class="dim">taken? live terminal. Real checks via GitHub\'s public API, e.g.</span>');
-  print('<span class="cmd">$ taken --help</span>');
-  print(HELP);
+  print('<span class="dim">taken? live terminal. Type <span class="cmd">taken owner/repo#123</span> and press enter for a real live check, or <span class="cmd">taken --help</span>.</span>');
 
   input.addEventListener('keydown', function (e) {
     if (e.key === 'Enter') { run(input.value); input.value = ''; }
@@ -249,7 +242,6 @@ always prints its evidence so you can judge for yourself.</p>
   document.querySelectorAll('.term-hint code').forEach(function (el) {
     el.addEventListener('click', function () {
       input.value = el.getAttribute('data-cmd');
-      run(input.value); input.value = '';
       input.focus();
     });
   });
