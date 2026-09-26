@@ -10,14 +10,16 @@ jobs:
   scan:
     name: SonarQube Cloud scan
     runs-on: ubuntu-latest
-    # Advisory only: skipped until the repo is connected on SonarQube
-    # Cloud and the SONAR_TOKEN secret is added (see #78).
-    if: ${{ secrets.SONAR_TOKEN != '' }}
+    # Advisory only: the scan step is skipped until the repo is connected
+    # on SonarQube Cloud and the SONAR_TOKEN secret is added (see #78).
+    # Note: the secrets context is not allowed in `if:`, so the secret
+    # is mirrored into env here, which is allowed in `if:`.
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: SonarQube Cloud scan
+        if: env.SONAR_TOKEN != ''
         uses: sonarsource/sonarqube-scan-action@v8
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
