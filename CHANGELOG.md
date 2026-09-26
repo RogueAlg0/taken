@@ -23,6 +23,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   round-robin from each label's results instead of stopping once the first
   label fills the verify pool. The labels searched and their raw candidate
   counts are printed to stderr.
+- `gh` transport is honest about failures: rate-limit output (HTTP 429 /
+  "rate limit exceeded") raises a dedicated `RateLimitError` with the reset
+  time when `gh` reports one, and is never retried. Transient 5xx errors get
+  at most 2 retries with backoff and jitter (so parallel workers don't
+  stampede); everything else fails fast.
+- `--discover` tells error-drops apart from verdict-drops: when nothing
+  passes verification it reports how many candidates errored, and when all
+  of them did it says so explicitly with a hint to check `gh auth status`
+  and the network.
 
 ### Added
 - First-time-friendly recommendations: `taken --discover` lines and MCP

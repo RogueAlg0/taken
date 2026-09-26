@@ -129,6 +129,25 @@ class NotFoundError(TakenError):
     """A GitHub resource did not exist (HTTP 404)."""
 
 
+class RateLimitError(TakenError):
+    """GitHub API rate limit hit: wait for the reset, never retry into it."""
+
+
+# Retry policy for the `gh` subprocess. Transient 5xx failures get a bounded
+# number of retries with backoff and jitter; the jitter keeps parallel
+# discover workers from retrying in lockstep and multiplying budget burn.
+# Rate-limit failures are never retried (hard stop): retrying into a limit
+# spends budget for nothing, and 8 workers doing it would hit one shared
+# limit 8x over.
+RETRY_ATTEMPTS = 3
+RETRY_BASE_DELAY = 1.0
+
+_TRANSIENT_5XX_RE = re.compile(
+    r"\b50[0234]\b|internal server error|bad gateway|service unavailable|gateway timeout",
+    re.IGNORECASE,
+)
+
+
 def _require_dict(value, endpoint):
     """Fail closed: a check that got a non-object response must error, not guess."""
     if not isinstance(value, dict):
@@ -269,6 +288,35 @@ def _cache_write(key, data):
         pass  # the cache must never break the tool
 
 
+def _is_rate_limited(err):
+    """Detect rate-limit signals in `gh` stderr (HTTP 429 / 403 rate limit)."""
+    lowered = err.lower()
+    return "rate limit" in lowered or "429" in lowered or "too many requests" in lowered
+
+
+def _rate_limit_message(endpoint, err):
+    """Dedicated rate-limit message, with the reset time when gh reports one."""
+    reset = None
+    match = re.search(r"reset\D*?(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?)", err, re.IGNORECASE)
+    if match:
+        reset = match.group(1).replace("T", " ")
+    else:
+        match = re.search(
+            r"(?:try again in|retry after|resets? in)\s+([^\n.]{1,40})", err, re.IGNORECASE
+        )
+        if match:
+            reset = "in " + match.group(1).strip()
+    when = (
+        f" Rate limit resets {reset}."
+        if reset
+        else " Check `gh api rate_limit` for the reset time."
+    )
+    return (
+        f"GitHub API rate limit exceeded for `gh api {endpoint}`.{when} "
+        "No verdict was recorded: wait for the reset instead of retrying."
+    )
+
+
 def gh_api(endpoint, params=None):
     """GET a GitHub API endpoint via `gh api` and return parsed JSON."""
     key = _cache_key(endpoint, params)
@@ -279,17 +327,27 @@ def gh_api(endpoint, params=None):
     cmd = ["gh", "api", endpoint.lstrip("/")]
     for key_param, value in (params or {}).items():
         cmd.extend(["-f", f"{key_param}={value}"])
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=API_TIMEOUT)
-    except FileNotFoundError:
-        raise TakenError("the `gh` CLI is not installed or not on PATH")
-    except subprocess.TimeoutExpired:
-        raise TakenError(f"`gh api {endpoint}` timed out after {API_TIMEOUT}s")
-    if proc.returncode != 0:
+    attempt = 0
+    while True:
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=API_TIMEOUT)
+        except FileNotFoundError:
+            raise TakenError("the `gh` CLI is not installed or not on PATH")
+        except subprocess.TimeoutExpired:
+            raise TakenError(f"`gh api {endpoint}` timed out after {API_TIMEOUT}s")
+        if proc.returncode == 0:
+            break
         err = (proc.stderr or "").strip()
         if "404" in err or "Not Found" in err:
             raise NotFoundError(f"not found: {endpoint}")
-        raise TakenError(f"`gh api {endpoint}` failed: {err[:300]}")
+        if _is_rate_limited(err):
+            raise RateLimitError(_rate_limit_message(endpoint, err))
+        attempt += 1
+        if not _TRANSIENT_5XX_RE.search(err) or attempt >= RETRY_ATTEMPTS:
+            raise TakenError(f"`gh api {endpoint}` failed: {err[:300]}")
+        # Transient 5xx: back off with jitter so parallel discover workers
+        # don't retry in lockstep.
+        time.sleep(RETRY_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 0.5))
     try:
         data = json.loads(proc.stdout)
     except json.JSONDecodeError:

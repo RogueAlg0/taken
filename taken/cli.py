@@ -250,7 +250,23 @@ def run_discover(args):
     if bar is not None:
         bar.close()
     if not results:
-        print("no candidates passed verification", file=sys.stderr)
+        errors = getattr(results, "errors", 0)
+        total = getattr(results, "total", 0)
+        if errors and errors == total:
+            # Every candidate errored: the tool is broken, not the data.
+            print(
+                f"no candidates passed verification: all {total} errored "
+                "(check `gh auth status` and your network connection)",
+                file=sys.stderr,
+            )
+        elif errors:
+            print(
+                f"no candidates passed verification "
+                f"({errors} of {total} candidates failed with errors)",
+                file=sys.stderr,
+            )
+        else:
+            print("no candidates passed verification", file=sys.stderr)
         return 0
     if args.json:
         print(

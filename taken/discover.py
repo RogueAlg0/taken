@@ -90,20 +90,25 @@ def score_candidate(findings, updated_at, engaged):
 
 
 def _verify_candidate(owner, repo, number, item, min_stars, me):
-    """Run the full check on one candidate. Returns the ranked entry or None.
+    """Run the full check on one candidate.
 
     Kept separate so the pool can be verified concurrently; each call only
     does idempotent GETs through the (thread-safe) cache.
+
+    Returns (entry, error): the ranked entry (or None when the candidate
+    was filtered by a real verdict), and the TakenError when verification
+    itself failed (or None). Callers use the error to tell "nothing is
+    available" apart from "the tool is broken".
     """
     try:
         findings = checks.run_checks(owner, repo, number, me=me)
-    except checks.TakenError:
-        return None  # fail-closed per issue; keep scanning the rest
+    except checks.TakenError as exc:
+        return None, exc  # fail-closed per issue; keep scanning the rest
     verdict, reasons = decide(findings)
     if verdict != GO:
-        return None
+        return None, None
     if (findings["repo_health"].get("stars") or 0) < min_stars:
-        return None
+        return None, None
     comments = checks.fetch_comments(owner, repo, number)
     engaged = maintainer_engaged(findings["issue"], comments, me=me)
     points, why = score_candidate(findings, item.get("updated_at"), engaged)
@@ -117,7 +122,20 @@ def _verify_candidate(owner, repo, number, item, min_stars, me):
         "updated_at": item.get("updated_at") or "",
         "friendly_labels": checks.friendly_labels(findings),
         "welcoming": checks.welcoming_signals(findings),
-    }
+    }, None
+
+
+class DiscoverResults(list):
+    """Ranked candidates plus verification stats.
+
+    errors: candidates that failed with TakenError instead of a verdict.
+    total: candidates that entered the verify pool.
+    """
+
+    def __init__(self, items=(), *, errors=0, total=0):
+        super().__init__(items)
+        self.errors = errors
+        self.total = total
 
 
 def _collect_candidates(labels, language, updated_after):
@@ -181,7 +199,9 @@ def discover(
     on_searched, when given, is called as on_searched([(label, count), ...])
     after the search phase, so callers can report what was searched.
 
-    Returns a list of dicts sorted by score (desc), then recency (desc):
+    Returns a DiscoverResults (a list of dicts sorted by score (desc),
+    then recency (desc)) with .errors / .total stats, so callers can tell
+    "no GO candidates" apart from "verification kept failing":
     target, score, why, verdict, reasons, findings, updated_at,
     friendly_labels (first-time-contributor labels on the issue),
     welcoming (repo-level signs contributions are welcome).
@@ -196,6 +216,7 @@ def discover(
     if on_progress is not None:
         on_progress(0, total)
     ranked = []
+    errors = 0
     workers = max(1, jobs)
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
@@ -211,11 +232,13 @@ def discover(
             done += 1
             if on_progress is not None:
                 on_progress(done, total)
-            entry = future.result()
-            if entry is not None:
+            entry, error = future.result()
+            if error is not None:
+                errors += 1
+            elif entry is not None:
                 ranked.append(entry)
     # Score desc, then recency desc: the freshest candidate wins ties.
     # (A single sort; the old double-sort accidentally left equal scores
     # oldest-first because the second stable sort preserved the first.)
     ranked.sort(key=lambda r: (r["score"], r["updated_at"]), reverse=True)
-    return ranked[:limit]
+    return DiscoverResults(ranked[:limit], errors=errors, total=total)

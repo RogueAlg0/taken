@@ -257,6 +257,56 @@ def test_discover_me_comment_not_counted_as_maintainer(monkeypatch, capsys):
     assert "maintainer replied" not in line
 
 
+def test_discover_all_errors_reported_distinctly(monkeypatch, capsys):
+    items = [search_item(1, 1), search_item(2, 2)]
+    base = make_fake(items, {1: "go", 2: "go"}, {})
+
+    def fake(endpoint, params=None):
+        if endpoint == "search/issues":
+            return {"total_count": 2, "incomplete_results": False, "items": items}
+        if "/issues/" in endpoint:
+            raise checks.TakenError("network down")
+        return base(endpoint, params)
+
+    monkeypatch.setattr(checks, "gh_api", fake)
+    assert main(["--discover", "--label", "good first issue"]) == 0
+    err = capsys.readouterr().err
+    assert "no candidates passed verification: all 2 errored" in err
+    assert "gh auth status" in err
+
+
+def test_discover_partial_errors_reported_with_counts(monkeypatch, capsys):
+    items = [search_item(1, 1), search_item(2, 2)]
+    base = make_fake(items, {1: "taken", 2: "go"}, {})
+
+    def fake(endpoint, params=None):
+        if endpoint == "search/issues":
+            return {"total_count": 2, "incomplete_results": False, "items": items}
+        if endpoint == "repos/octo/repo/issues/2":
+            raise checks.TakenError("network down")
+        return base(endpoint, params)
+
+    monkeypatch.setattr(checks, "gh_api", fake)
+    assert main(["--discover", "--label", "good first issue"]) == 0
+    err = capsys.readouterr().err
+    assert "no candidates passed verification (1 of 2 candidates failed with errors)" in err
+
+
+def test_discover_results_carry_error_stats(monkeypatch):
+    items = [search_item(1, 1)]
+
+    def fake(endpoint, params=None):
+        if endpoint == "search/issues":
+            return {"total_count": 1, "incomplete_results": False, "items": items}
+        raise checks.TakenError("network down")
+
+    monkeypatch.setattr(checks, "gh_api", fake)
+    results = discover.discover(label="good first issue", jobs=1)
+    assert results == []
+    assert results.errors == 1
+    assert results.total == 1
+
+
 def test_repo_of():
     assert discover.repo_of({"repository_url": "https://api.github.com/repos/octo/repo"}) == (
         "octo",
