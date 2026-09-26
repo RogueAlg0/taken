@@ -19,6 +19,46 @@
   });
   term.open(document.getElementById('xterm'));
 
+  /* Clickable issue references: owner/repo#123 opens the GitHub issue.
+   * xterm 5.x only offers registerLinkProvider (registerLinkMatcher was
+   * removed), so matches are computed per line from the buffer. */
+  var ISSUE_RE = /([\w][\w.-]*)\/([\w][\w.-]*)#(\d+)/g;
+  var ISSUE_FULL_RE = /^([\w][\w.-]*)\/([\w][\w.-]*)#(\d+)$/;
+  term.registerLinkProvider({
+    provideLinks: function (y, callback) {
+      var line = term.buffer.active.getLine(y - 1);
+      if (!line) {
+        callback(undefined);
+        return;
+      }
+      var text = line.translateToString(true);
+      var links = [];
+      var match;
+      ISSUE_RE.lastIndex = 0;
+      while ((match = ISSUE_RE.exec(text)) !== null) {
+        links.push({
+          range: {
+            start: { x: match.index + 1, y: y },
+            end: { x: match.index + match[0].length + 1, y: y }
+          },
+          text: match[0],
+          activate: function (event, text) {
+            var parts = ISSUE_FULL_RE.exec(text);
+            if (parts) {
+              window.open(
+                'https://github.com/' + parts[1] + '/' + parts[2] + '/issues/' + parts[3],
+                '_blank',
+                'noopener'
+              );
+            }
+          },
+          decorations: { pointerCursor: true, underline: true }
+        });
+      }
+      callback(links.length ? links : undefined);
+    }
+  });
+
   var PYODIDE_URL = 'https://cdn.jsdelivr.net/pyodide/v0.27.4/full/';
 
   function out(text) {
