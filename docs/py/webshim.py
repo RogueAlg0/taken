@@ -53,8 +53,7 @@ def _web_gh_api(endpoint, params=None):
         raise checks.NotFoundError(f"not found: {endpoint}")
     if status == 403:
         raise checks.TakenError(
-            "GitHub API rate limit reached (60/hour for visitors without login). "
-            "Try again later."
+            "GitHub API rate limit reached (60/hour for visitors without login). Try again later."
         )
     raise checks.TakenError(f"GitHub API returned HTTP {status} for {endpoint}")
 
@@ -73,7 +72,7 @@ def format_human(findings, verdict, reasons):
         f"taken? {findings['target']}",
         f"verdict: {verdict}",
         "",
-        f"  issue: {issue['state']}, \"{issue['title']}\"",
+        f'  issue: {issue["state"]}, "{issue["title"]}"',
         f"         {issue['url']} ({issue['comment_count']} comments)",
     ]
     if findings["linked_prs"]:
@@ -84,7 +83,7 @@ def format_human(findings, verdict, reasons):
                 status = "merged"
             else:
                 status = "closed"
-            lines.append(f"  linked PR: #{pr['number']} \"{pr['title']}\" ({status})")
+            lines.append(f'  linked PR: #{pr["number"]} "{pr["title"]}" ({status})')
             lines.append(f"             {pr['url']}")
     else:
         lines.append("  linked PRs: none found in timeline")
@@ -95,15 +94,15 @@ def format_human(findings, verdict, reasons):
     if findings["claimants"]:
         for hit in findings["claimants"]:
             lines.append(
-                f"  claimant: {hit['author']} on {hit['date']} (matched \"{hit['pattern']}\")"
+                f'  claimant: {hit["author"]} on {hit["date"]} (matched "{hit["pattern"]}")'
             )
-            lines.append(f"            \"{hit['snippet']}\"")
+            lines.append(f'            "{hit["snippet"]}"')
     else:
         lines.append("  claimants: none found in comments")
     if policy["source"]:
         lines.append(f"  AI policy: {policy['verdict']} ({policy['source']})")
         if policy["snippet"]:
-            lines.append(f"             \"{policy['snippet']}\"")
+            lines.append(f'             "{policy["snippet"]}"')
     else:
         lines.append("  AI policy: none found (no CONTRIBUTING file)")
     lines.append(
