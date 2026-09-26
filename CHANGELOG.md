@@ -7,14 +7,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Hotspots badge in the README: per-file cyclomatic complexity x commit churn.
+  `scripts/hotspots.py` regenerates `docs/badges/hotspot.json`; a workflow
+  opens a refresh PR on every push to main when the numbers change.
+
+### Fixed
+- The PyPI badges in README.md and docs/index.html are back to the dynamic
+  `img.shields.io/pypi/v/taken-gh` badge. A pinned static badge was tried
+  first because shields kept serving a stale cached version (v0.5.0 while
+  PyPI was at 0.7.0), then reverted per maintainer preference: the dynamic
+  badge lags releases due to shields caching but is self-maintaining and
+  needs no per-release bump.
+
+## [0.7.1] - 2026-09-26
+
+### Added
 - `mcp` is now an optional dependency: plain `taken-gh` installs the CLI
   without the MCP SDK; `pip install taken-gh[mcp]` (or
   `uvx --from "taken-gh[mcp]" taken-mcp`) enables the MCP server.
   Running `taken-mcp` without the extra prints guidance instead of a
   traceback.
-- Hotspots badge in the README: per-file cyclomatic complexity x commit churn.
-  `scripts/hotspots.py` regenerates `docs/badges/hotspot.json`; a workflow
-  opens a refresh PR on every push to main when the numbers change.
 - New `--clear-cache` flag: deletes the API response cache
   (`~/.cache/taken`, overridable via `TAKEN_CACHE_DIR`) and reports how
   many entries were cleared. Works as a standalone action:
@@ -22,13 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - The web console's `taken --version` string in docs/py/webshim.py is
-  bumped to 0.7.0 (it was hardcoded to 0.6.0).
-- The PyPI badges in README.md and docs/index.html are back to the dynamic
-  `img.shields.io/pypi/v/taken-gh` badge. A pinned static badge was tried
-  first because shields kept serving a stale cached version (v0.5.0 while
-  PyPI was at 0.7.0), then reverted per maintainer preference: the dynamic
-  badge lags releases due to shields caching but is self-maintaining and
-  needs no per-release bump.
+  bumped to 0.7.1.
 - Web terminal: every http(s) URL printed in the console is now a clickable
   link, not just `owner/repo#123` refs. The link provider scans each line
   for URLs, trims trailing punctuation, and opens the URL in a new tab
