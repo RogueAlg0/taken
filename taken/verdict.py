@@ -11,6 +11,17 @@ TAKEN = "TAKEN"
 CAUTION = "CAUTION"
 
 
+def _truncation_reasons(findings):
+    """CAUTION reasons for timeline/comment scans that stopped at the page cap."""
+    reasons = []
+    scan_truncated = findings.get("scan_truncated") or {}
+    if scan_truncated.get("timeline"):
+        reasons.append("timeline scan hit the page cap; a linked PR beyond the cap would be missed")
+    if scan_truncated.get("comments"):
+        reasons.append("comment scan hit the page cap; a claimant beyond the cap would be missed")
+    return reasons
+
+
 def decide(findings):
     """Return (verdict, reasons). TAKEN wins over CAUTION wins over GO."""
     taken_reasons = []
@@ -45,15 +56,7 @@ def decide(findings):
 
     # A scan that stopped early at the page cap did not see everything.
     # Downgrade to CAUTION rather than risk a GO on incomplete evidence.
-    scan_truncated = findings.get("scan_truncated") or {}
-    if scan_truncated.get("timeline"):
-        caution_reasons.append(
-            "timeline scan hit the page cap; a linked PR beyond the cap would be missed"
-        )
-    if scan_truncated.get("comments"):
-        caution_reasons.append(
-            "comment scan hit the page cap; a claimant beyond the cap would be missed"
-        )
+    caution_reasons.extend(_truncation_reasons(findings))
 
     health = findings["repo_health"]
     if not health["pushed_recently"] and health["recent_merges"] == 0:
