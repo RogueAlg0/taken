@@ -52,14 +52,14 @@ jobs:
           code=$?
           set -e
           test "$code" -eq 3
-      - name: Smoke test taken-mcp without the mcp extra
+      - name: Smoke test taken-mcp starts and speaks MCP
         run: |
           set +e
-          /tmp/smoke-venv/bin/taken-mcp 2>/tmp/taken-mcp-err.txt
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' | timeout 30 /tmp/smoke-venv/bin/taken-mcp >/tmp/taken-mcp-out.txt 2>/tmp/taken-mcp-err.txt
           code=$?
           set -e
-          test "$code" -eq 2
-          grep -q 'taken-gh\[mcp\]' /tmp/taken-mcp-err.txt
+          test "$code" -eq 0
+          grep -q '"jsonrpc"' /tmp/taken-mcp-out.txt
 
   reuse:
     name: REUSE compliance
