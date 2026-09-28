@@ -7,9 +7,9 @@ Run with the ``taken-mcp`` console script (stdio transport). The server
 inherits the invoker's environment, so ``gh`` must be installed and
 authenticated, exactly like the ``taken`` CLI.
 
-Needs the optional ``mcp`` dependency (``pip install taken-gh[mcp]``).
-Without it this module still imports cleanly, but ``main()`` prints
-guidance instead of starting a server.
+Needs the ``mcp`` dependency, which ships with every ``taken-gh`` install.
+If it is ever missing (broken install) this module still imports cleanly,
+but ``main()`` prints guidance instead of starting a server.
 
 Never print to stdout here: it carries the JSON-RPC stream. Logs go to
 stderr only.
@@ -20,7 +20,7 @@ from typing import Annotated
 
 try:
     from pydantic import Field
-except ImportError:  # pydantic is only present with the optional MCP dependency
+except ImportError:  # pydantic ships with the `mcp` dependency
 
     def Field(**kwargs):  # type: ignore[no-redef]
         return kwargs
@@ -247,8 +247,8 @@ def discover_candidates(
 def _create_server():
     """Build the MCP server and register taken's tools.
 
-    Imported lazily so the ``taken`` CLI installs and runs without the
-    optional ``mcp`` dependency.
+    Called at import time; an ImportError is caught by the caller so a
+    broken ``mcp`` install degrades to a guidance message.
     """
     from mcp.server import MCPServer
 
@@ -266,7 +266,7 @@ def _create_server():
 
 try:
     mcp = _create_server()
-except ImportError:  # optional `mcp` dependency not installed
+except ImportError:  # `mcp` is required; this only triggers on a broken install
     mcp = None
 
 
@@ -274,8 +274,8 @@ def main():
     """Entry point for the ``taken-mcp`` console script."""
     if mcp is None:
         print(
-            "taken-mcp needs the MCP SDK, which is an optional dependency: "
-            'install it with pip install "taken-gh[mcp]"',
+            "taken-mcp needs the MCP SDK, which ships with taken-gh: "
+            'try pip install --force-reinstall "taken-gh[mcp]"',
             file=sys.stderr,
         )
         return 2

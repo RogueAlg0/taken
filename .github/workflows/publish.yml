@@ -94,7 +94,23 @@ jobs:
         run: |
           uv build
           mkdir -p deb-wheels
-          python3 -m pip download --no-deps -d deb-wheels tqdm
+          # Vendor the full runtime dependency closure so the offline
+          # --no-index postinst install succeeds. Requirements are read
+          # from the built wheel's METADATA (not hardcoded) so this stays
+          # correct as dependencies change.
+          REQS=$(python3 - <<'EOF'
+          import glob, zipfile, email
+          from email.policy import default
+          wheel = sorted(glob.glob("dist/taken_gh-*-py3-none-any.whl"))[0]
+          with zipfile.ZipFile(wheel) as z:
+              name = next(n for n in z.namelist() if n.endswith(".dist-info/METADATA"))
+              msg = email.message_from_string(z.read(name).decode(), policy=default)
+          for req in msg.get_all("Requires-Dist") or []:
+              print(req)
+          EOF
+          )
+          # shellcheck disable=SC2086
+          python3 -m pip download -d deb-wheels $REQS
       - name: Assemble the .deb package
         run: |
           set -e

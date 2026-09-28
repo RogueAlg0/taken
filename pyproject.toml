@@ -21,12 +21,13 @@ classifiers = [
 urls = { Homepage = "https://roguealg0.github.io/taken/", Repository = "https://github.com/RogueAlg0/taken" }
 dependencies = [
     "tqdm>=4.66",
+    "mcp>=2.0,<3",
 ]
 
 [project.optional-dependencies]
-mcp = [
-    "mcp>=2.0,<3",
-]
+# Kept for backwards compatibility; `mcp` is a required dependency now,
+# so `pip install taken-gh[mcp]` is a harmless no-op.
+mcp = []
 
 [project.scripts]
 taken = "taken.cli:main"
@@ -40,7 +41,8 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.0",
     "types-tqdm",
-    # Optional at runtime (taken-gh[mcp]), but the test suite covers it.
+    # Also a runtime dependency now; listed explicitly so the test env
+    # matches what `pip install taken-gh` provides.
     "mcp>=2.0,<3",
 ]
 
