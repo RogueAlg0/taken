@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-09-27
+
 ### Added
 - Opt-in GraphQL fetch paths for the single-issue pipeline: `--graphql`
   (`TAKEN_GRAPHQL=1`) runs one GraphQL query per issue via `gh api
@@ -16,6 +18,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   shape and verdicts. MCP `check_issue` gains matching `graphql` and
   `persistent_session` parameters. See GRAPHQL_NOTES.md for measurements
   and the security tradeoff.
+- `--verbose` flag: prints an API usage summary (calls per endpoint,
+  cache hits/misses) to stderr at the end of the run.
+- `--debug` flag: prints a machine-readable JSON debug report (wall-clock
+  timings per phase, rate-limit state before/after, retries, backoff time,
+  API usage) to stderr at the end of the run; implies `--verbose`. Only
+  counts, timings, and sizes: never tokens or response bodies.
+- `taken-mcp` now works out of the box on every install channel: the MCP
+  SDK is a required dependency instead of an optional extra, so a plain
+  `pip install taken-gh` ships a working server. The `.deb` now vendors
+  the full dependency closure for offline installs, and the README and
+  MCP registry entries were updated to match. `taken-gh[mcp]` still
+  installs fine as a harmless no-op.
+
+### Fixed
+- Timeline and comment scans now fail closed when they hit the page cap
+  instead of silently truncating results.
+- `--discover` exits 3 when every candidate errors, instead of reporting
+  a misleading success.
+- `--discover` clamps a negative `--limit` to 0 instead of slicing winners
+  off the ranked list.
+- Error messages that merely contain the digits "404" are no longer
+  misclassified as not-found.
+- `--me` matching in maintainer-engagement checks is now case-insensitive.
+- The API cache is now namespaced by GitHub identity, so switching
+  accounts no longer serves stale cross-user results.
+- Skipped fetch stages are reported as "not checked" in human output
+  instead of being silently omitted.
+
+### Changed
+- Single-issue fetches are now ordered cheapest-decisive-first, stopping
+  early on a decisive TAKEN to save API calls.
+- Ruff rule sets UP (pyupgrade) and B (bugbear) are now enabled.
+- CI now guards that the vendored docs pipeline copies stay byte-identical
+  with `taken/`.
+- Hotspot metric collection hardened against silent drift.
 
 ## [0.7.2] - 2026-09-26
 

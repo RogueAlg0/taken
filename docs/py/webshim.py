@@ -351,7 +351,7 @@ def run_command(line):
     if low in ("taken --help", "help"):
         return HELP
     if low == "taken --version":
-        return "taken 0.7.2 (Pyodide build: taken's real Python code, running in your browser)"
+        return "taken 0.7.3 (Pyodide build: taken's real Python code, running in your browser)"
     if low.startswith("taken --discover"):
         discover_rest = low[len("taken --discover") :].strip()
         dlimit = WEB_DISCOVER_DEFAULT
