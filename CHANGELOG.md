@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Contributor onboarding: expanded CONTRIBUTING.md with setup, workflow,
+  and local checks; new bug-report and feature-request issue templates;
+  PR template gains a short "Verification" section.
+
 ## [0.7.3] - 2026-09-27
 
 ### Added
