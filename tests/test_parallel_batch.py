@@ -66,7 +66,7 @@ def test_batch_checks_run_concurrently(monkeypatch, capsys):
     _mute_transport(monkeypatch)
     barrier = threading.Barrier(2, timeout=15)
 
-    def fake_check_one(owner, repo, number, me, mode="rest", payload=None):
+    def fake_check_one(owner, repo, number, me, mode="rest", payload=None, thresholds=None):
         barrier.wait()  # raises BrokenBarrierError if never overlapped
         return (f"{owner}/{repo}#{number}", "GO", ["reason"], {})
 
@@ -81,7 +81,7 @@ def test_batch_output_order_preserved(monkeypatch, capsys):
     budget.activate(identity="someone")
     _mute_transport(monkeypatch)
 
-    def fake_check_one(owner, repo, number, me, mode="rest", payload=None):
+    def fake_check_one(owner, repo, number, me, mode="rest", payload=None, thresholds=None):
         if number == 1:
             time.sleep(2)
         return (f"{owner}/{repo}#{number}", "GO", ["reason"], {})
@@ -96,7 +96,7 @@ def test_batch_output_order_preserved(monkeypatch, capsys):
 def test_batch_verdict_parity_sequential_vs_parallel(monkeypatch, capsys):
     """Same targets, same output, whether 1 worker or 8 (plus a parse error)."""
 
-    def fake_check_one(owner, repo, number, me, mode="rest", payload=None):
+    def fake_check_one(owner, repo, number, me, mode="rest", payload=None, thresholds=None):
         verdict = "TAKEN" if number == 1 else "GO"
         return (f"o/r#{number}", verdict, [f"reason {number}"], {})
 
@@ -130,11 +130,11 @@ def test_batch_uses_tier_worker_count(monkeypatch):
         return real(*args, **kwargs)
 
     monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", spy)
-    monkeypatch.setattr(
-        cli,
-        "check_one",
-        lambda o, r, n, me, mode="rest", payload=None: (f"{o}/{r}#{n}", "GO", [], {}),
-    )
+
+    def fake(o, r, n, me, mode="rest", payload=None, thresholds=None):
+        return (f"{o}/{r}#{n}", "GO", [], {})
+
+    monkeypatch.setattr(cli, "check_one", fake)
     _mute_transport(monkeypatch)
 
     budget.activate(identity=None)
@@ -154,7 +154,7 @@ def test_batch_repo_scan_checks_issues_concurrently(monkeypatch, capsys):
     monkeypatch.setattr(checks, "list_open_issues", lambda *a, **k: [{"number": 1}, {"number": 2}])
     barrier = threading.Barrier(2, timeout=15)
 
-    def fake_check_one(owner, repo, number, me, mode="rest", payload=None):
+    def fake_check_one(owner, repo, number, me, mode="rest", payload=None, thresholds=None):
         barrier.wait()
         return (f"{owner}/{repo}#{number}", "GO", ["reason"], {})
 
@@ -169,7 +169,7 @@ def test_batch_check_error_does_not_stop_others(monkeypatch, capsys):
     budget.activate(identity="someone")
     _mute_transport(monkeypatch)
 
-    def fake_check_one(owner, repo, number, me, mode="rest", payload=None):
+    def fake_check_one(owner, repo, number, me, mode="rest", payload=None, thresholds=None):
         if number == 1:
             raise checks.TakenError("simulated failure")
         return (f"{owner}/{repo}#{number}", "GO", ["reason"], {})

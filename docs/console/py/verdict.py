@@ -60,6 +60,21 @@ DESIGN_SIGNALS = frozenset(
 LONG_THREAD_COMMENTS = 30
 
 
+def age_phrase(days):
+    """Human phrase for a day count: 'today', 'yesterday', 'N days ago'.
+
+    Lives here (rather than in checks.py) so decide() can use it without a
+    circular import; checks.py imports it from this module.
+    """
+    if days is None:
+        return "date unknown"
+    if days == 0:
+        return "today"
+    if days == 1:
+        return "yesterday"
+    return f"{days} days ago"
+
+
 def _truncation_reasons(findings):
     """CAUTION reasons for timeline/comment/label scans that stopped at the page cap."""
     reasons = []
@@ -98,18 +113,56 @@ def _difficulty_fit_reasons(findings):
     return reasons
 
 
+def _is_complex_issue(issue):
+    """Whether an issue gets the longer claimant-silence window (issue #83).
+
+    Complex means design-level labels or a long discussion thread, reusing
+    the same signals as the difficulty-fit heads-up below.
+    """
+    labels = issue.get("labels") or []
+    if any(label.lower() in DESIGN_SIGNALS for label in labels):
+        return True
+    return (issue.get("comment_count") or 0) >= LONG_THREAD_COMMENTS
+
+
+def _silence_window_days(findings):
+    """Days one claim blocks as CAUTION: 7d on simple issues, 14d on complex."""
+    thresholds = findings.get("thresholds") or {}
+    if _is_complex_issue(findings["issue"]):
+        return thresholds.get("claim_silence_complex_days", 14)
+    return thresholds.get("claim_silence_days", 7)
+
+
 def decide(findings):
     """Return (verdict, reasons). TAKEN wins over CAUTION wins over GO."""
     taken_reasons = []
     caution_reasons = []
     issue = findings["issue"]
+    thresholds = findings.get("thresholds") or {}
+    pr_idle_days = thresholds.get("pr_idle_days", 90)
 
     if issue["state"] == "closed":
         taken_reasons.append(f"issue is closed: {issue['url']}")
 
     for pr in findings["linked_prs"]:
         if pr["state"] == "open":
-            taken_reasons.append(f"open PR #{pr['number']} already covers this: {pr['url']}")
+            idle = pr.get("idle_days")
+            if idle is not None and idle > pr_idle_days:
+                # Validated half of issue #83: an open PR with no activity
+                # past the threshold is stale work, not live coverage, so
+                # its TAKEN signal weakens to CAUTION. Unknown activity
+                # stays TAKEN (fail closed).
+                caution_reasons.append(
+                    f"open PR #{pr['number']} idle {idle}d with no activity "
+                    f"(past the {pr_idle_days}d threshold): treating as stale: {pr['url']}"
+                )
+            else:
+                detail = ""
+                if idle is not None:
+                    detail = f" (last activity {age_phrase(idle)})"
+                taken_reasons.append(
+                    f"open PR #{pr['number']} already covers this{detail}: {pr['url']}"
+                )
         elif pr["merged"]:
             caution_reasons.append(
                 f"PR #{pr['number']} was merged but the issue is still open (stale?): {pr['url']}"
@@ -118,11 +171,19 @@ def decide(findings):
     if issue["assignees"]:
         taken_reasons.append(f"assigned to: {', '.join(issue['assignees'])}")
 
+    window = _silence_window_days(findings)
+    expired_claims = 0
     for hit in findings["claimants"]:
-        caution_reasons.append(
-            f"{hit['author']} expressed interest on {hit['date']}: "
-            f'"{hit["snippet"]}" ({hit["url"]})'
-        )
+        since = hit.get("days_since_claimant_activity")
+        if since is not None and since > window:
+            # Claimant-silence redesign (issue #83): a claim blocks as
+            # CAUTION only while the claimant was recently active. The
+            # clock resets on any claimant activity; a claim never
+            # auto-closes anything, it only ever yields CAUTION.
+            expired_claims += 1
+            continue
+        label = hit.get("age_label") or "expressed interest"
+        caution_reasons.append(f'{hit["author"]} {label}: "{hit["snippet"]}" ({hit["url"]})')
 
     policy = findings["ai_policy"]["verdict"]
     if policy == "ban":
@@ -147,4 +208,9 @@ def decide(findings):
         return TAKEN, taken_reasons
     if caution_reasons:
         return CAUTION, caution_reasons
+    if expired_claims:
+        return GO, [
+            f"{expired_claims} old claim(s) of interest, but no claimant "
+            f"activity in the last {window}d: treating as stale"
+        ]
     return GO, ["no linked PRs, no assignees, no claimants, repo is active"]

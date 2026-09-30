@@ -365,11 +365,13 @@ def test_findings_shape_matches_rest_contract(monkeypatch):
         "issue",
         "linked_prs",
         "claimants",
+        "thresholds",
         "ai_policy",
         "repo_health",
         "scan_truncated",
         "stages_skipped",
     }
+    assert findings["thresholds"] == checks.default_thresholds()
     assert findings["stages_skipped"] == []
     assert set(findings["issue"]) == {
         "number",
@@ -417,6 +419,9 @@ def test_verdict_matches_rest_findings(monkeypatch):
                 "merged": False,
                 "author": "dev",
                 "url": "https://github.com/o/r/pull/7",
+                "updated_at": None,
+                "idle_days": None,
+                "age_label": "open PR #7, last activity date unknown",
             }
         ],
         "claimants": [
@@ -426,8 +431,12 @@ def test_verdict_matches_rest_findings(monkeypatch):
                 "url": "u",
                 "pattern": "work on",
                 "snippet": "I would like to work on this",
+                "age_days": None,
+                "days_since_claimant_activity": None,
+                "age_label": "expressed interest date unknown",
             }
         ],
+        "thresholds": checks.default_thresholds(),
         "ai_policy": {"verdict": "ban", "snippet": "", "source": "CONTRIBUTING.md"},
         "repo_health": {
             "pushed_at": "2026-09-26",

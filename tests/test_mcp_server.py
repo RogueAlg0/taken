@@ -389,7 +389,7 @@ def test_check_issue_explicit_flags_still_win(monkeypatch):
 def test_check_issue_graphql_fallback_is_surfaced(monkeypatch, faked):
     monkeypatch.setattr(checks, "_github_identity", lambda: "someone")
 
-    def boom(owner, repo, number, me=None, mode="graphql", session=None):
+    def boom(owner, repo, number, me=None, mode="graphql", session=None, thresholds=None):
         raise checks.TakenError("transport down")
 
     monkeypatch.setattr(graphql, "run_checks_graphql", boom)
@@ -438,7 +438,7 @@ def test_discover_candidates_uses_automatic_mode(monkeypatch):
 def test_mcp_and_cli_verdict_parity_on_graphql_path(monkeypatch, faked):
     from taken import cli
 
-    def fake_gql(owner, repo, number, me=None, mode="graphql", session=None):
+    def fake_gql(owner, repo, number, me=None, mode="graphql", session=None, thresholds=None):
         findings = checks.run_checks(owner, repo, number, me=me)
         findings["transport"] = "graphql"
         return findings

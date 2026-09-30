@@ -47,7 +47,7 @@ def stubbed(monkeypatch):
         item = {"number": 1, "updated_at": "2026-09-26T00:00:00Z"}
         return ([("o", "r", 1, item)], [("good first issue", 1)], [])
 
-    def fake_graphql(owner, repo, number, me=None, mode="graphql", session=None):
+    def fake_graphql(owner, repo, number, me=None, mode="graphql", session=None, thresholds=None):
         calls.append(
             {"owner": owner, "repo": repo, "number": number, "mode": mode, "session": session}
         )

@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Changed
+- Stale-claim decay, validated half (issue #83): every claimant hit and
+  every linked PR now carries an age label in the findings ("expressed
+  interest 214 days ago", "open PR #12, last activity 96 days ago") on both
+  the REST and GraphQL paths. An open linked PR with no activity past the
+  `--pr-idle-days` threshold (default 90) weakens from TAKEN to CAUTION
+  instead of blocking as taken; a claim blocks as CAUTION only while its
+  claimant was recently active (`--claim-silence-days`, default 7, or
+  `--claim-silence-complex-days`, default 14 on complex issues), with the
+  clock resetting on any claimant activity. Claim age alone never changes a
+  verdict, and a claim never closes anything.
 - Authenticated `run_checks` tail stages (claimants, AI policy, repo health)
   now run concurrently, and the repo-health sub-fetches run concurrently
   too; anonymous callers keep the sequential path. Identical verdicts,

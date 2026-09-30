@@ -155,6 +155,31 @@ def build_parser():
         help="GraphQL over one persistent HTTPS connection for the process; "
         "token from `gh auth token` is held in memory only. Opt-in.",
     )
+    parser.add_argument(
+        "--pr-idle-days",
+        type=int,
+        default=checks.DEFAULT_PR_IDLE_DAYS,
+        metavar="N",
+        help="stale-claim decay: an open linked PR with no activity for longer than N days "
+        f"weakens from TAKEN to CAUTION (default: {checks.DEFAULT_PR_IDLE_DAYS})",
+    )
+    parser.add_argument(
+        "--claim-silence-days",
+        type=int,
+        default=checks.DEFAULT_CLAIM_SILENCE_DAYS,
+        metavar="N",
+        help="stale-claim decay: days one claim blocks as CAUTION on a simple issue; "
+        "the clock resets on any claimant activity "
+        f"(default: {checks.DEFAULT_CLAIM_SILENCE_DAYS})",
+    )
+    parser.add_argument(
+        "--claim-silence-complex-days",
+        type=int,
+        default=checks.DEFAULT_CLAIM_SILENCE_COMPLEX_DAYS,
+        metavar="N",
+        help="stale-claim decay: days one claim blocks as CAUTION on a complex issue "
+        f"(default: {checks.DEFAULT_CLAIM_SILENCE_COMPLEX_DAYS})",
+    )
     parser.add_argument("--version", action="version", version=f"taken {__version__}")
     return parser
 
@@ -405,7 +430,24 @@ def run_discover(args):
     return 0
 
 
-def check_one(owner, repo, number, me, mode="rest", payload=None):
+def _thresholds_from_args(args):
+    """Stale-claim decay settings (issue #83) from the parsed CLI flags.
+
+    getattr with defaults keeps check_one() callable with hand-built
+    namespaces that predate these flags (as in tests).
+    """
+    return {
+        "pr_idle_days": getattr(args, "pr_idle_days", checks.DEFAULT_PR_IDLE_DAYS),
+        "claim_silence_days": getattr(
+            args, "claim_silence_days", checks.DEFAULT_CLAIM_SILENCE_DAYS
+        ),
+        "claim_silence_complex_days": getattr(
+            args, "claim_silence_complex_days", checks.DEFAULT_CLAIM_SILENCE_COMPLEX_DAYS
+        ),
+    }
+
+
+def check_one(owner, repo, number, me, mode="rest", payload=None, thresholds=None):
     """Run the full check on one issue. Returns (target, verdict, reasons, findings).
 
     GraphQL-family modes fall back to REST per issue when the GraphQL
@@ -415,9 +457,12 @@ def check_one(owner, repo, number, me, mode="rest", payload=None):
     list_open_issues): on the REST path it skips the per-issue refetch
     (issue #211). The GraphQL path issues one combined query per issue
     and cannot reuse a REST item, so the payload is ignored there.
+
+    `thresholds` carries the stale-claim decay settings (issue #83);
+    None means the defaults.
     """
     findings = graphql.run_checks_with_fallback(
-        owner, repo, number, me=me, mode=mode, payload=payload
+        owner, repo, number, me=me, mode=mode, payload=payload, thresholds=thresholds
     )
     verdict, reasons = decide(findings)
     return f"{owner}/{repo}#{number}", verdict, reasons, findings
@@ -448,7 +493,12 @@ def run_single(text, args):
     _, owner, repo, number = parsed
     try:
         target, verdict, reasons, findings = check_one(
-            owner, repo, number, args.me, mode=graphql.fetch_mode(args)
+            owner,
+            repo,
+            number,
+            args.me,
+            mode=graphql.fetch_mode(args),
+            thresholds=_thresholds_from_args(args),
         )
     except checks.TakenError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -526,7 +576,16 @@ def run_batch(targets, args):
         workers = budget.current().batch_workers
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [
-                pool.submit(check_one, owner, repo, number, args.me, mode, payload)
+                pool.submit(
+                    check_one,
+                    owner,
+                    repo,
+                    number,
+                    args.me,
+                    mode,
+                    payload,
+                    _thresholds_from_args(args),
+                )
                 for _, owner, repo, number, payload in jobs
             ]
             for (label, _, _, _, _), future in zip(jobs, futures, strict=True):

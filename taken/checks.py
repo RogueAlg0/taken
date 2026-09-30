@@ -20,12 +20,61 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from taken import budget
-from taken.verdict import FIRST_TIME_LABELS, TAKEN, decide
+from taken.verdict import FIRST_TIME_LABELS, TAKEN, age_phrase, decide
 
 API_TIMEOUT = 60
 HEALTH_WINDOW_DAYS = 30
 CONTRIBUTORS_WINDOW_DAYS = 90
 CACHE_TTL_SECONDS = 3600
+
+# Stale-claim decay thresholds (issue #83). PR_IDLE_DAYS is the number of
+# days an open linked PR may sit without activity before its TAKEN signal
+# weakens to CAUTION. CLAIM_SILENCE_DAYS is how long one claimant comment
+# blocks as CAUTION on a simple issue (CLAIM_SILENCE_COMPLEX_DAYS on a
+# complex one); the clock resets on any further activity by that claimant.
+# All three are configurable via CLI flags; these are the defaults.
+DEFAULT_PR_IDLE_DAYS = 90
+DEFAULT_CLAIM_SILENCE_DAYS = 7
+DEFAULT_CLAIM_SILENCE_COMPLEX_DAYS = 14
+
+
+def default_thresholds():
+    """The stale-claim decay thresholds decide() reads from the findings."""
+    return {
+        "pr_idle_days": DEFAULT_PR_IDLE_DAYS,
+        "claim_silence_days": DEFAULT_CLAIM_SILENCE_DAYS,
+        "claim_silence_complex_days": DEFAULT_CLAIM_SILENCE_COMPLEX_DAYS,
+    }
+
+
+def _parse_ts(ts):
+    """Parse an ISO-8601 timestamp to an aware datetime; None when unknown."""
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def days_since(ts, now=None):
+    """Whole days from an ISO-8601 timestamp until now; None when unknown."""
+    dt = _parse_ts(ts)
+    if dt is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    return max(0, (now - dt).days)
+
+
+def pr_age_label(pr):
+    """One-line age label for a linked-PR finding dict."""
+    state = pr.get("state")
+    word = "open" if state == "open" else "merged" if pr.get("merged") else state or "PR"
+    return f"{word} PR #{pr.get('number')}, last activity {age_phrase(pr.get('idle_days'))}"
+
 
 # Endpoints become positional arguments to the `gh api` subprocess, so keep
 # them to a safe alphabet: no leading dash (which `gh` would parse as a
@@ -933,23 +982,46 @@ def check_timeline(owner, repo, number):
             continue
         seen.add(key)
         pr = gh_api(f"repos/{pr_owner}/{pr_repo}/pulls/{pr_number}")
-        linked.append(
-            {
-                "number": int(pr_number),
-                "title": pr.get("title"),
-                "state": pr.get("state"),
-                "merged": bool(pr.get("merged_at")),
-                "author": (pr.get("user") or {}).get("login"),
-                "url": pr.get("html_url"),
-            }
-        )
+        updated_at = pr.get("updated_at")
+        pr_info = {
+            "number": int(pr_number),
+            "title": pr.get("title"),
+            "state": pr.get("state"),
+            "merged": bool(pr.get("merged_at")),
+            "author": (pr.get("user") or {}).get("login"),
+            "url": pr.get("html_url"),
+            "updated_at": updated_at,
+            "idle_days": days_since(updated_at),
+        }
+        pr_info["age_label"] = pr_age_label(pr_info)
+        linked.append(pr_info)
     return linked, truncated
 
 
-def find_claimant_hits(comments, me=None):
-    """Scan comment bodies for claimant language, skipping the given login."""
+def find_claimant_hits(comments, me=None, now=None):
+    """Scan comment bodies for claimant language, skipping the given login.
+
+    Each hit carries its age in days plus the days since the claimant's
+    latest comment of any kind on the issue, so the silence-window rule in
+    decide() can tell a live claim from a stale one. `now` is an override
+    for the reference time (tests); None means the current time.
+    """
     if not isinstance(comments, list):
         raise TakenError("comment scan got an unexpected response")
+    now = now or datetime.now(timezone.utc)
+    # Latest activity per author across ALL comments: the silence clock
+    # resets on any claimant activity, not just claimant-language comments.
+    latest_activity = {}
+    for comment in comments:
+        author = (comment.get("user") or {}).get("login", "") or ""
+        if not author:
+            continue
+        ts = _parse_ts(comment.get("created_at"))
+        if ts is None:
+            continue
+        key = author.lower()
+        if key not in latest_activity or ts > latest_activity[key][0]:
+            latest_activity[key] = (ts, author)
     hits = []
     me_lower = (me or "").lower()
     for comment in comments:
@@ -962,13 +1034,20 @@ def find_claimant_hits(comments, me=None):
         if matched is None:
             continue
         snippet = " ".join(body.split())
+        created_at = comment.get("created_at") or ""
+        age_days = days_since(created_at, now)
+        latest = latest_activity.get(author.lower())
+        since_activity = max(0, (now - latest[0]).days) if latest else None
         hits.append(
             {
                 "author": author,
-                "date": (comment.get("created_at") or "")[:10],
+                "date": created_at[:10],
                 "pattern": matched,
                 "snippet": snippet[:160],
                 "url": comment.get("html_url"),
+                "age_days": age_days,
+                "days_since_claimant_activity": since_activity,
+                "age_label": f"expressed interest {age_phrase(age_days)}",
             }
         )
     return hits
@@ -1182,13 +1261,18 @@ def check_repo_health(owner, repo, window_days=HEALTH_WINDOW_DAYS):
     }
 
 
-def run_checks(owner, repo, number, me=None, payload=None):
+def run_checks(owner, repo, number, me=None, payload=None, thresholds=None):
     """Run the full read-only check suite on one issue; return findings.
 
     `payload` is an optional pre-fetched search/issues item: when it
     carries every field check_issue() needs, the per-issue GET is skipped
     (issue #153). The plain path passes nothing and behaves exactly as
     before.
+
+    `thresholds` carries the stale-claim decay settings (issue #83);
+    None means the defaults from default_thresholds(). decide() reads
+    them from the findings, so the early-stop checks below apply the
+    same weakening rules as the final verdict.
 
     Fetches run cheapest-decisive-first and stop early as soon as decide()
     reports TAKEN: the issue call alone settles closed and assigned issues,
@@ -1211,6 +1295,10 @@ def run_checks(owner, repo, number, me=None, payload=None):
         "issue": issue,
         "linked_prs": [],
         "claimants": [],
+        # Stale-claim decay settings (issue #83). decide() reads them here
+        # so the early-stop checks below weaken signals exactly like the
+        # final verdict does.
+        "thresholds": thresholds or default_thresholds(),
         # Neutral placeholders for stages not yet fetched: decide() reads
         # "not-checked" / a skipped-healthy repo as no signal either way.
         # recent_merges is 0 (not 1) so welcoming_signals() stays silent;

@@ -81,12 +81,12 @@ query IssueVerdict(
           __typename
           ... on CrossReferencedEvent {
             source { __typename ... on PullRequest {
-              number title state mergedAt url author { login }
+              number title state mergedAt updatedAt url author { login }
               repository { nameWithOwner } } }
           }
           ... on ConnectedEvent {
             source { __typename ... on PullRequest {
-              number title state mergedAt url author { login }
+              number title state mergedAt updatedAt url author { login }
               repository { nameWithOwner } } }
           }
         }
@@ -471,8 +471,14 @@ def _map_linked_prs(timeline_nodes):
                 "merged": bool(src.get("mergedAt")),
                 "author": author.get("login"),
                 "url": src.get("url"),
+                # Shape parity with the REST path (issue #83): every linked
+                # PR carries its age so decide() can weaken idle ones.
+                "updated_at": src.get("updatedAt"),
+                "idle_days": checks.days_since(src.get("updatedAt")),
+                "age_label": "",
             }
         )
+        linked[-1]["age_label"] = checks.pr_age_label(linked[-1])
     return linked
 
 
@@ -568,8 +574,11 @@ def _paginate(connection, fetch_next, variables, after_key, max_pages):
     return nodes, bool(page_info.get("hasNextPage"))
 
 
-def run_checks_graphql(owner, repo, number, me=None, mode="graphql", session=None):
-    """Run the check suite via GraphQL; return findings like checks.run_checks."""
+def run_checks_graphql(owner, repo, number, me=None, mode="graphql", session=None, thresholds=None):
+    """Run the check suite via GraphQL; return findings like checks.run_checks.
+
+    `thresholds` carries the stale-claim decay settings (issue #83); None
+    means the defaults from checks.default_thresholds()."""
     if mode == "persistent":
         sess = session or get_session()
         fetch = lambda q, v: sess.query(q, v)  # noqa: E731
@@ -688,6 +697,8 @@ def run_checks_graphql(owner, repo, number, me=None, mode="graphql", session=Non
         "issue": issue,
         "linked_prs": _map_linked_prs(timeline_nodes),
         "claimants": checks.find_claimant_hits(_map_comments_to_rest_shape(comment_nodes), me=me),
+        # Parity with checks.run_checks: stale-claim decay settings (issue #83).
+        "thresholds": thresholds or checks.default_thresholds(),
         "ai_policy": _map_ai_policy(repository),
         "repo_health": _map_repo_health(repository),
         # Parity with checks.run_checks: which evidence scans stopped early.
@@ -703,7 +714,7 @@ def run_checks_graphql(owner, repo, number, me=None, mode="graphql", session=Non
 
 
 def run_checks_with_fallback(
-    owner, repo, number, me=None, mode="graphql", session=None, payload=None
+    owner, repo, number, me=None, mode="graphql", session=None, payload=None, thresholds=None
 ):
     """Run the check suite, falling back from GraphQL to REST on failure.
 
@@ -724,15 +735,21 @@ def run_checks_with_fallback(
     ignored there.
     """
     if mode not in ("graphql", "persistent"):
-        findings = checks.run_checks(owner, repo, number, me=me, payload=payload)
+        findings = checks.run_checks(
+            owner, repo, number, me=me, payload=payload, thresholds=thresholds
+        )
         findings["transport"] = "rest"
         return findings
     try:
-        findings = run_checks_graphql(owner, repo, number, me=me, mode=mode, session=session)
+        findings = run_checks_graphql(
+            owner, repo, number, me=me, mode=mode, session=session, thresholds=thresholds
+        )
     except checks.NotFoundError:
         raise
     except checks.TakenError as exc:
-        findings = checks.run_checks(owner, repo, number, me=me, payload=payload)
+        findings = checks.run_checks(
+            owner, repo, number, me=me, payload=payload, thresholds=thresholds
+        )
         findings["transport"] = "rest"
         findings["transport_fallback"] = f"{mode} transport failed ({exc}); fell back to REST"
         return findings
