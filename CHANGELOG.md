@@ -22,6 +22,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - New ARCHITECTURE.md: module map, the fetch/decide/present pipeline, and
   the invariants contributors must not break.
 
+### Fixed
+- Search pacing now actually caps in-flight searches at one: the lock is
+  held through the pace wait, the search subprocess, and retries, instead
+  of being released before the subprocess ran.
+
 ## [0.7.3] - 2026-09-27
 
 ### Added

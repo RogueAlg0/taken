@@ -312,19 +312,26 @@ _search_lock = threading.Lock()
 _last_search_at = 0.0
 
 
-def _pace_search():
-    """Wait until SEARCH_MIN_INTERVAL has passed since the last search call.
+def _wait_search_pace():
+    """Sleep until SEARCH_MIN_INTERVAL has passed since the last search.
 
-    The lock also caps in-flight search requests at one, so parallel
-    discover workers and retry bursts cannot stack searches on top of
-    each other.
+    The caller must already hold _search_lock. Keeping the pace wait
+    under the same lock that guards the search subprocess is what caps
+    in-flight search requests at one: a thread cannot even start pacing
+    its next search until the previous search (pace wait, subprocess,
+    and retries) has fully finished.
     """
     global _last_search_at
+    wait = SEARCH_MIN_INTERVAL - (time.monotonic() - _last_search_at)
+    if wait > 0:
+        time.sleep(wait)
+    _last_search_at = time.monotonic()
+
+
+def _pace_search():
+    """Wait until SEARCH_MIN_INTERVAL has passed since the last search call."""
     with _search_lock:
-        wait = SEARCH_MIN_INTERVAL - (time.monotonic() - _last_search_at)
-        if wait > 0:
-            time.sleep(wait)
-        _last_search_at = time.monotonic()
+        _wait_search_pace()
 
 
 _TRANSIENT_5XX_RE = re.compile(
@@ -659,24 +666,18 @@ def _rate_limit_message(endpoint, err):
     )
 
 
-def gh_api(endpoint, params=None):
-    """GET a GitHub API endpoint via `gh api` and return parsed JSON."""
-    key = _cache_key(endpoint, params)
-    if _CACHE_ENABLED:
-        cache_start = time.perf_counter()
-        cached = _cache_read(key)
-        record_phase("cache", time.perf_counter() - cache_start)
-        if cached is not None:
-            record_cache_result(True)
-            return cached
-        record_cache_result(False)
-    cmd = ["gh", "api", endpoint.lstrip("/")]
-    for key_param, value in (params or {}).items():
-        cmd.extend(["-f", f"{key_param}={value}"])
+def _gh_api_run(cmd, endpoint, paced):
+    """Run one `gh api` call through the retry loop; return parsed JSON.
+
+    When paced is True, every attempt starts with the search pace wait.
+    The caller must hold _search_lock for the whole call, so the pace
+    wait, the subprocess, and any retry backoff are all serialized and
+    two search subprocesses can never be in flight at once.
+    """
     attempt = 0
     while True:
-        if endpoint.lstrip("/").startswith("search/"):
-            _pace_search()
+        if paced:
+            _wait_search_pace()
         try:
             record_api_call(endpoint)
             rest_start = time.perf_counter()
@@ -720,6 +721,32 @@ def gh_api(endpoint, params=None):
         data = json.loads(proc.stdout)
     except json.JSONDecodeError:
         raise TakenError(f"`gh api {endpoint}` did not return JSON") from None
+    return data
+
+
+def gh_api(endpoint, params=None):
+    """GET a GitHub API endpoint via `gh api` and return parsed JSON."""
+    key = _cache_key(endpoint, params)
+    if _CACHE_ENABLED:
+        cache_start = time.perf_counter()
+        cached = _cache_read(key)
+        record_phase("cache", time.perf_counter() - cache_start)
+        if cached is not None:
+            record_cache_result(True)
+            return cached
+        record_cache_result(False)
+    cmd = ["gh", "api", endpoint.lstrip("/")]
+    for key_param, value in (params or {}).items():
+        cmd.extend(["-f", f"{key_param}={value}"])
+    if endpoint.lstrip("/").startswith("search/"):
+        # Search pacing: hold the lock through the pace wait AND the entire
+        # retry loop, so parallel discover workers and retry bursts can never
+        # have two search subprocesses in flight at once. Non-search
+        # endpoints never touch this lock and stay fully parallel.
+        with _search_lock:
+            data = _gh_api_run(cmd, endpoint, paced=True)
+    else:
+        data = _gh_api_run(cmd, endpoint, paced=False)
     if _CACHE_ENABLED:
         _cache_write(key, data)
     return data

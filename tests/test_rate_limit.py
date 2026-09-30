@@ -1,5 +1,8 @@
 """Rate-limit and retry behavior of the `gh` subprocess transport."""
 
+import threading
+import time
+
 import pytest
 
 from taken import checks
@@ -223,3 +226,53 @@ def test_pace_search_skips_wait_when_interval_elapsed(monkeypatch):
     monkeypatch.setattr(checks, "_last_search_at", checks.time.monotonic() - 10.0)
     checks._pace_search()
     assert sleeps == []
+
+
+def test_search_subprocesses_never_overlap(monkeypatch):
+    """Two concurrent search/issues calls must never overlap in flight.
+
+    Deterministic: the first thread is parked *inside* the mocked
+    subprocess while the second thread attempts entry. Before the fix,
+    the lock was released before subprocess.run, so the second thread
+    provably entered (this test failed). After the fix the lock is held
+    through the whole search, so it cannot.
+    """
+    entered = threading.Event()  # first thread is inside the fake subprocess
+    entered2 = threading.Event()  # second thread entered the fake subprocess
+    release = threading.Event()  # let the parked thread finish
+    intervals = []
+    intervals_lock = threading.Lock()
+
+    def fake_run(*args, **kwargs):
+        start = time.monotonic()
+        with intervals_lock:
+            intervals.append([start, None])
+            slot = len(intervals) - 1
+        (entered if slot == 0 else entered2).set()
+        assert release.wait(timeout=10), "test harness never released the subprocess"
+        with intervals_lock:
+            intervals[slot][1] = time.monotonic()
+        return FakeProc(0, '{"items": []}', "")
+
+    monkeypatch.setattr(checks.subprocess, "run", fake_run)
+    monkeypatch.setattr(checks, "_CACHE_ENABLED", False)
+    monkeypatch.setattr(checks, "SEARCH_MIN_INTERVAL", 0.0)
+    monkeypatch.setattr(checks, "_last_search_at", 0.0)
+
+    t1 = threading.Thread(target=checks.search_issues, args=("q1",))
+    t1.start()
+    try:
+        assert entered.wait(timeout=10), "first search never entered the subprocess"
+        t2 = threading.Thread(target=checks.search_issues, args=("q2",))
+        t2.start()
+        # While the first search is still in flight, the second must not enter.
+        assert not entered2.wait(timeout=5), "two search subprocesses overlapped in flight"
+    finally:
+        release.set()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+    assert not t1.is_alive() and not t2.is_alive()
+    # Belt and braces: the recorded execution intervals are disjoint.
+    with intervals_lock:
+        (s1, e1), (s2, e2) = sorted(intervals)
+    assert e1 <= s2 or e2 <= s1, f"overlapping search intervals: {intervals}"
