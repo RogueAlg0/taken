@@ -299,7 +299,7 @@ def run_discover(args):
 
     def on_searched(searched):
         detail = ", ".join(f"{lab} ({count})" for lab, count in searched)
-        print(f"searched {len(searched)} labels: {detail}", file=sys.stderr)
+        print(f"searched: {detail}", file=sys.stderr)
 
     try:
         results = discover.discover(

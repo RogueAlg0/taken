@@ -42,8 +42,19 @@ def _thread_graphql_session():
     return session
 
 
-def build_query(label, language=None, updated_after=None):
-    parts = ["is:open", "is:issue", "no:assignee", f'label:"{label}"']
+def build_query(labels, language=None, updated_after=None):
+    """Build a search/issues query matching any of the given labels.
+
+    Accepts a single label string or a list. Multiple labels are OR'd with
+    comma-separated values inside one label: qualifier, so one search call
+    covers every label instead of one call per label (GitHub's secondary
+    rate limits throttle burst velocity, not budget, and the old per-label
+    loop died 12.5s into a cold run with zero verdicts).
+    """
+    if isinstance(labels, str):
+        labels = [labels]
+    label_part = ",".join(f'"{lab}"' for lab in labels)
+    parts = ["is:open", "is:issue", "no:assignee", f"label:{label_part}"]
     if updated_after:
         parts.append(f"updated:>={updated_after}")
     if language:
@@ -178,45 +189,37 @@ class DiscoverResults(list):
 
 
 def _collect_candidates(labels, language, updated_after):
-    """Search every label and interleave the results into one deduped pool.
+    """Search once with all labels OR'd and fill the verify pool.
 
-    The old loop broke out as soon as the first label filled VERIFY_POOL,
-    so the remaining labels were never searched. Round-robin across the
-    per-label result lists guarantees every label contributes.
+    A single search/issues call covers every label, so a cold discover run
+    no longer fires a burst of back-to-back search calls into GitHub's
+    secondary rate limit. Results arrive sorted by recency (see
+    checks.search_issues), so the pool fills with the freshest candidates
+    first. Items are deduplicated by (owner, repo, number) as a safety net.
 
     Returns (candidates, searched): the pool capped at VERIFY_POOL, and a
-    [(label, items_returned)] list so callers can report what was searched.
+    one-entry [(labels_summary, items_returned)] list so callers can report
+    what was searched. Per-label counts are no longer available: one query
+    cannot attribute results to individual labels without extra calls,
+    which is exactly what this change avoids.
     """
-    per_label = []
-    for lab in labels:
-        query = build_query(lab, language=language, updated_after=updated_after)
-        items = checks.search_issues(query, per_page=SEARCH_PER_PAGE)
-        per_label.append((lab, items))
+    query = build_query(labels, language=language, updated_after=updated_after)
+    items = checks.search_issues(query, per_page=SEARCH_PER_PAGE)
     candidates = []
     seen = set()
-    index = 0
-    while len(candidates) < VERIFY_POOL:
-        progressed = False
-        for _lab, items in per_label:
-            if index >= len(items):
-                continue
-            progressed = True
-            item = items[index]
-            where = repo_of(item)
-            if not where:
-                continue
-            owner, repo = where
-            key = (owner, repo, item.get("number"))
-            if key in seen:
-                continue
-            seen.add(key)
-            candidates.append((owner, repo, item.get("number"), item))
-            if len(candidates) >= VERIFY_POOL:
-                break
-        if not progressed:
+    for item in items:
+        if len(candidates) >= VERIFY_POOL:
             break
-        index += 1
-    searched = [(lab, len(items)) for lab, items in per_label]
+        where = repo_of(item)
+        if not where:
+            continue
+        owner, repo = where
+        key = (owner, repo, item.get("number"))
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append((owner, repo, item.get("number"), item))
+    searched = [(", ".join(labels), len(items))]
     return candidates, searched
 
 
@@ -236,8 +239,10 @@ def discover(
     Candidates are verified concurrently (jobs threads). on_progress, when
     given, is called as on_progress(done, total) from the calling thread as
     each candidate finishes, so callers can drive a progress bar.
-    on_searched, when given, is called as on_searched([(label, count), ...])
-    after the search phase, so callers can report what was searched.
+    on_searched, when given, is called as on_searched([(labels, count)])
+    after the search phase, so callers can report what was searched: one
+    entry carrying the comma-joined labels and the single query's result
+    count.
     mode selects the verification fetch path: "rest" (default), "graphql",
     or "persistent" (see graphql.fetch_mode).
 

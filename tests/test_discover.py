@@ -160,25 +160,20 @@ def test_discover_tie_break_prefers_recent(monkeypatch):
     assert results[0]["score"] == results[1]["score"]
 
 
-def test_discover_searches_every_label(monkeypatch, capsys):
-    # The first label alone returns enough items to fill the whole pool;
-    # the second label must still contribute candidates. jobs=1 keeps the
-    # ranking deterministic (parallel completion order is arbitrary).
-    label_one = [search_item(n, 1) for n in range(1, 51)]
-    label_two = [search_item(n, 1) for n in range(101, 106)]
-    for item in label_one + label_two:
+def test_discover_uses_single_ord_label_search(monkeypatch, capsys):
+    # One search/issues call covers every label: comma-separated values in a
+    # single label: qualifier are OR'd by GitHub. jobs=1 keeps the ranking
+    # deterministic (parallel completion order is arbitrary).
+    items = [search_item(n, 1) for n in range(1, 6)]
+    for item in items:
         item["updated_at"] = "2026-09-25T00:00:00Z"  # identical: ties keep pool order
     base = make_fake([], {}, {})
+    search_calls = []
 
     def fake(endpoint, params=None):
         if endpoint == "search/issues":
             q = (params or {}).get("q", "")
-            if 'label:"good first issue"' in q:
-                items = label_one
-            elif 'label:"good-first-issue"' in q:
-                items = label_two
-            else:
-                items = []
+            search_calls.append(q)
             return {
                 "total_count": len(items),
                 "incomplete_results": False,
@@ -188,22 +183,20 @@ def test_discover_searches_every_label(monkeypatch, capsys):
 
     monkeypatch.setattr(checks, "gh_api", fake)
     searched = []
-    # limit=50 returns the whole verify pool: this test is about which
-    # labels contribute candidates to the pool, not about ranking ties,
-    # so it must not depend on top-N tie-break order.
+    # limit=50 returns the whole verify pool.
     results = discover.discover(jobs=1, limit=50, on_searched=searched.append)
     targets = [r["target"] for r in results]
+    assert len(search_calls) == 1
+    for lab in discover.SEARCH_LABELS:
+        assert f'"{lab}"' in search_calls[0]
     assert len(targets) <= discover.VERIFY_POOL
-    assert "octo/repo#1" in targets  # first label contributed
-    assert "octo/repo#101" in targets  # second label contributed too
-    assert ("good first issue", 50) in searched[0]
-    assert ("good-first-issue", 5) in searched[0]
+    assert "octo/repo#1" in targets
+    assert searched == [[(", ".join(discover.SEARCH_LABELS), 5)]]
 
-    # The CLI reports the searched labels and counts on stderr.
+    # The CLI reports the combined search on stderr.
     assert main(["--discover"]) == 0
     err = capsys.readouterr().err
-    assert "good first issue (50)" in err
-    assert "good-first-issue (5)" in err
+    assert "searched: good first issue, good-first-issue, beginner friendly, help wanted (5)" in err
 
 
 def test_discover_with_targets_is_error(capsys):
@@ -218,6 +211,9 @@ def test_build_query():
         'is:open is:issue no:assignee label:"good first issue" updated:>=2026-08-26 language:python'
     )
     assert discover.build_query("help wanted") == 'is:open is:issue no:assignee label:"help wanted"'
+    assert discover.build_query(["good first issue", "help wanted"]) == (
+        'is:open is:issue no:assignee label:"good first issue","help wanted"'
+    )
 
 
 def test_maintainer_engaged():
