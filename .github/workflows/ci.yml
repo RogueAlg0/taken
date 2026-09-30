@@ -79,7 +79,7 @@ jobs:
       - name: Check vendored docs copies match taken/
         run: |
           fail=0
-          for pair in "taken/checks.py docs/console/py/checks.py" "taken/verdict.py docs/console/py/verdict.py"; do
+          for pair in "taken/checks.py docs/console/py/checks.py" "taken/verdict.py docs/console/py/verdict.py" "taken/budget.py docs/console/py/budget.py"; do
             set -- $pair
             if ! diff -q "$1" "$2" > /dev/null; then
               echo "::error::$2 is out of sync with $1"
@@ -88,7 +88,7 @@ jobs:
             fi
           done
           if [ "$fail" -ne 0 ]; then
-            echo 'Re-copy with: cp taken/checks.py docs/console/py/checks.py && cp taken/verdict.py docs/console/py/verdict.py'
+            echo 'Re-copy with: cp taken/checks.py docs/console/py/checks.py && cp taken/verdict.py docs/console/py/verdict.py && cp taken/budget.py docs/console/py/budget.py'
             exit 1
           fi
       - name: Check webshim version matches package version

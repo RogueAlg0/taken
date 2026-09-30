@@ -103,13 +103,15 @@
     return Promise.all([
       fetch('py/checks.py').then(function (r) { return r.text(); }),
       fetch('py/verdict.py').then(function (r) { return r.text(); }),
+      fetch('py/budget.py').then(function (r) { return r.text(); }),
       fetch('py/webshim.py').then(function (r) { return r.text(); })
     ]);
   }).then(function (texts) {
     pyodide.FS.mkdir('/takenweb');
     pyodide.FS.writeFile('/takenweb/checks.py', texts[0]);
     pyodide.FS.writeFile('/takenweb/verdict.py', texts[1]);
-    pyodide.FS.writeFile('/takenweb/webshim.py', texts[2]);
+    pyodide.FS.writeFile('/takenweb/budget.py', texts[2]);
+    pyodide.FS.writeFile('/takenweb/webshim.py', texts[3]);
     pyodide.runPython("import sys; sys.path.insert(0, '/takenweb'); import webshim");
     ready = true;
     out("ready. taken's real Python code is running in your browser.");
