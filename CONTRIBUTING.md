@@ -21,6 +21,8 @@ are welcome.
    taken shells out to `gh api` with your own credentials, so the tool cannot
    do anything you could not do yourself.
 4. `uv run taken --help` to see it working.
+5. Read [ARCHITECTURE.md](ARCHITECTURE.md) for the module map and the
+   invariants to keep intact.
 
 ## Workflow
 
