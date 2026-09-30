@@ -2,6 +2,10 @@
 
 ## Why?
 
+## Verification
+
+How did you check this works? (commands run, output seen)
+
 ## Checklist
 
 - [ ] `uv run ruff check` passes
