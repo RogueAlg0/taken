@@ -13,14 +13,14 @@
     {
       "file": "taken/cli.py",
       "cc": 93,
-      "commits": 18,
-      "hotspot": 1674
+      "commits": 19,
+      "hotspot": 1767
     },
     {
       "file": "taken/discover.py",
-      "cc": 62,
-      "commits": 13,
-      "hotspot": 806
+      "cc": 59,
+      "commits": 14,
+      "hotspot": 826
     },
     {
       "file": "taken/graphql.py",
