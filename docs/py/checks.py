@@ -18,7 +18,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from taken.verdict import TAKEN, decide
+from taken.verdict import FIRST_TIME_LABELS, TAKEN, decide
 
 API_TIMEOUT = 60
 HEALTH_WINDOW_DAYS = 30
@@ -246,27 +246,8 @@ CONTRIBUTING_PATHS = [
     "CONTRIBUTING.rst",
 ]
 
-# Labels that mark an issue as suitable for a first-time contributor.
-# Matched case-insensitively against the issue's label names.
-FIRST_TIME_LABELS = frozenset(
-    {
-        "good first issue",
-        "good-first-issue",
-        "good second issue",
-        "beginner friendly",
-        "beginner-friendly",
-        "beginner",
-        "first-timers-only",
-        "help wanted",
-        "easy",
-        "up-for-grabs",
-        "up for grabs",
-        "starter",
-        "newbie",
-        "newcomer friendly",
-        "newcomer-friendly",
-    }
-)
+# FIRST_TIME_LABELS lives in taken/verdict.py so decide() can use it without
+# a circular import; it is imported at the top of this module.
 
 
 def friendly_labels(findings):
