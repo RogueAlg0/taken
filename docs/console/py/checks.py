@@ -26,6 +26,19 @@ HEALTH_WINDOW_DAYS = 30
 CONTRIBUTORS_WINDOW_DAYS = 90
 CACHE_TTL_SECONDS = 3600
 
+# Endpoints become positional arguments to the `gh api` subprocess, so keep
+# them to a safe alphabet: no leading dash (which `gh` would parse as a
+# flag), no whitespace or control characters. Every endpoint the codebase
+# builds (repos/..., search/..., graphql, contents/...) fits this shape.
+_ENDPOINT_SAFE_RE = re.compile(r"[A-Za-z0-9_./][A-Za-z0-9_./-]*")
+
+
+def _require_safe_endpoint(endpoint):
+    """Reject an endpoint string that could not be a plain API path."""
+    if not isinstance(endpoint, str) or not _ENDPOINT_SAFE_RE.fullmatch(endpoint):
+        raise TakenError(f"refusing to call unsafe API endpoint: {endpoint!r}")
+
+
 # Timeline and comment scans page through the API instead of trusting the
 # first 100 results: on a busy issue a linked PR or a claimant comment can
 # hide on a later page, which would silently flip a verdict to GO.
@@ -761,6 +774,7 @@ def _gh_api_run(cmd, endpoint, paced):
 
 def gh_api(endpoint, params=None):
     """GET a GitHub API endpoint via `gh api` and return parsed JSON."""
+    _require_safe_endpoint(endpoint)
     key = _cache_key(endpoint, params)
     if _CACHE_ENABLED:
         cache_start = time.perf_counter()

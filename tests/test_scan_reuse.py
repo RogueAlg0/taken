@@ -153,3 +153,28 @@ def test_mcp_scan_repo_skips_refetch(monkeypatch):
     assert by_target == {"octo/repo#1": "GO", "octo/repo#2": "TAKEN"}
     assert calls.count("repos/octo/repo/issues") == 1
     assert issue_gets(calls) == []
+
+
+def test_gh_api_rejects_unsafe_endpoint():
+    from taken import checks
+
+    for bad in ("--help", "-X", "repos/a/b; rm -rf", "repos/a/b\nc", "", " repos/a/b", 123):
+        try:
+            checks.gh_api(bad)
+        except checks.TakenError:
+            pass
+        else:
+            raise AssertionError(f"gh_api accepted unsafe endpoint: {bad!r}")
+
+
+def test_gh_api_accepts_plain_endpoints():
+    from taken import checks
+
+    for good in (
+        "repos/o/r/issues/1",
+        "search/issues",
+        "graphql",
+        "repos/o/r/contents/docs/CONTRIBUTING.md",
+        "repos/o/r/issues/1/timeline",
+    ):
+        assert checks._require_safe_endpoint(good) is None
