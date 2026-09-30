@@ -1,6 +1,7 @@
 """Command-line interface for taken."""
 
 import argparse
+import concurrent.futures
 import json
 import re
 import sys
@@ -477,11 +478,18 @@ def run_batch(targets, args):
     printed at the end.
     Returns 0 when every target produced a verdict, 3 when any target
     failed to parse or its checks errored.
+
+    Target parsing and repo issue listings stay sequential (cheap, and
+    their error messages keep input order); the per-issue checks run
+    through a worker pool sized by the budget tier, reusing discover's
+    ThreadPoolExecutor pattern. Results are collected in input order,
+    so output is identical to the sequential run.
     """
     results = []
     failed = False
     scanned_repo = False
     mode = graphql.fetch_mode(args)
+    jobs = []  # (error label, owner, repo, number) in input order
     for text in targets:
         parsed = parse_target(text)
         if not parsed:
@@ -500,20 +508,27 @@ def run_batch(targets, args):
             if not issues:
                 print(f"note: {text}: no open issues found", file=sys.stderr)
             for issue_owner, issue_repo, number in issues:
-                try:
-                    results.append(check_one(issue_owner, issue_repo, number, args.me, mode=mode))
-                except checks.TakenError as exc:
-                    print(f"error: {issue_owner}/{issue_repo}#{number}: {exc}", file=sys.stderr)
-                    failed = True
+                jobs.append(
+                    (f"{issue_owner}/{issue_repo}#{number}", issue_owner, issue_repo, number)
+                )
         else:
             _, owner, repo, number = parsed
-            try:
-                results.append(check_one(owner, repo, number, args.me, mode=mode))
-            except checks.TakenError as exc:
-                print(f"error: {text}: {exc}", file=sys.stderr)
-                failed = True
+            jobs.append((text, owner, repo, number))
+    if jobs:
+        workers = budget.current().batch_workers
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [
+                pool.submit(check_one, owner, repo, number, args.me, mode)
+                for _, owner, repo, number in jobs
+            ]
+            for (label, _, _, _), future in zip(jobs, futures, strict=True):
+                try:
+                    results.append(future.result())
+                except checks.TakenError as exc:
+                    print(f"error: {label}: {exc}", file=sys.stderr)
+                    failed = True
     if args.json:
-        budget = checks.budget_report()
+        budget_info = checks.budget_report()
         print(
             json.dumps(
                 [
@@ -522,7 +537,7 @@ def run_batch(targets, args):
                         "verdict": verdict,
                         "reasons": reasons,
                         "findings": findings,
-                        "budget": budget,
+                        "budget": budget_info,
                     }
                     for target, verdict, reasons, findings in results
                 ],

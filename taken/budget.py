@@ -57,6 +57,8 @@ class Budget:
     gql_label_pages: int
     # Discover caps
     discover_pool: int  # candidates fully verified per run
+    # Parallelism
+    batch_workers: int  # worker threads for scan/batch multi-issue checks
 
 
 _BUDGETS = {
@@ -72,6 +74,10 @@ _BUDGETS = {
         gql_merge_pages=2,
         gql_label_pages=3,
         discover_pool=40,
+        # Sequential: the anonymous tier keeps today's exact single-threaded
+        # behavior, so the docs console and any unauthenticated caller are
+        # unaffected by the parallel batch work.
+        batch_workers=1,
     ),
     TIER_AUTHENTICATED: Budget(
         tier=TIER_AUTHENTICATED,
@@ -97,6 +103,11 @@ _BUDGETS = {
         gql_label_pages=3,
         # More verified candidates = better-ranked results.
         discover_pool=80,
+        # Matches discover's DEFAULT_JOBS verify pool: the same accepted
+        # concurrency for a 5,000/hr budget. Each issue's checks are
+        # independent GETs against the thread-safe cache, so no verdict
+        # change is possible.
+        batch_workers=8,
     ),
 }
 

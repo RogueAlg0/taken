@@ -72,6 +72,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   reports it as a CAUTION truncation reason through the existing honesty
   machinery instead of silently losing label context.
 
+### Changed
+- Scan and batch modes now check issues concurrently: `run_batch` (CLI) and
+  `scan_repo` (MCP) verify targets through a worker pool reusing discover's
+  ThreadPoolExecutor pattern instead of one at a time. The anonymous tier
+  stays sequential (1 worker, today's exact behavior); the authenticated
+  tier uses 8 workers. Output order and verdicts are unchanged.
+
 ## [0.7.3] - 2026-09-27
 
 ### Added
