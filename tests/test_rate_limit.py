@@ -169,3 +169,57 @@ def test_rate_limit_id_containing_404_digits_not_misclassified(monkeypatch):
     with pytest.raises(checks.RateLimitError, match="rate limit exceeded"):
         checks.gh_api("repos/octo/repo")
     assert len(calls) == checks.RETRY_ATTEMPTS
+
+
+def pace_setup(monkeypatch, interval=30.0):
+    """Small interval, clean pacing state, recorded sleeps."""
+    sleeps = []
+    monkeypatch.setattr(checks.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(checks, "SEARCH_MIN_INTERVAL", interval)
+    monkeypatch.setattr(checks, "_last_search_at", 0.0)
+    return sleeps
+
+
+def test_search_calls_are_paced(monkeypatch):
+    calls = []
+    stub_run(monkeypatch, [FakeProc(0, '{"items": []}', "")] * 2, calls)
+    sleeps = pace_setup(monkeypatch)
+    checks.gh_api("search/issues", {"q": "x"})
+    checks.gh_api("search/issues", {"q": "x"})
+    assert len(calls) == 2
+    assert len(sleeps) == 1 and sleeps[0] > 0
+
+
+def test_search_retry_attempts_are_paced(monkeypatch):
+    calls = []
+    stub_run(
+        monkeypatch,
+        [
+            FakeProc(1, "", "gh: You have exceeded a secondary rate limit. (HTTP 403)"),
+            FakeProc(0, '{"items": []}', ""),
+        ],
+        calls,
+    )
+    sleeps = pace_setup(monkeypatch)
+    checks.gh_api("search/issues", {"q": "x"})
+    assert len(calls) == 2
+    assert any(s >= 29.0 for s in sleeps)  # retry attempt waited out the interval
+
+
+def test_non_search_calls_are_not_paced(monkeypatch):
+    calls = []
+    stub_run(monkeypatch, [FakeProc(0, '{"ok": true}', "")] * 2, calls)
+    sleeps = pace_setup(monkeypatch)
+    checks.gh_api("repos/octo/repo")
+    checks.gh_api("repos/octo/repo")
+    assert len(calls) == 2
+    assert sleeps == []
+
+
+def test_pace_search_skips_wait_when_interval_elapsed(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(checks.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(checks, "SEARCH_MIN_INTERVAL", 2.0)
+    monkeypatch.setattr(checks, "_last_search_at", checks.time.monotonic() - 10.0)
+    checks._pace_search()
+    assert sleeps == []
