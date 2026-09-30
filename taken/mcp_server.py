@@ -15,6 +15,7 @@ Never print to stdout here: it carries the JSON-RPC stream. Logs go to
 stderr only.
 """
 
+import subprocess
 import sys
 from typing import Annotated
 
@@ -48,6 +49,30 @@ def _check_one(owner, repo, number, me=None, mode="rest"):
     }
 
 
+def _error_payload(exc: Exception) -> dict[str, str]:
+    message = str(exc)
+    if isinstance(exc, checks.RateLimitError):
+        code = "rate_limited"
+    elif isinstance(exc, checks.NotFoundError):
+        code = "not_found"
+    elif isinstance(exc, subprocess.TimeoutExpired) or "timed out after" in message.lower():
+        code = "timeout"
+    elif any(
+        marker in message.lower()
+        for marker in (
+            "http 401",
+            "bad credentials",
+            "gh auth login",
+            "`gh auth token` failed",
+            "requires authentication",
+        )
+    ):
+        code = "auth_failed"
+    else:
+        code = "unknown"
+    return {"error": message, "error_code": code}
+
+
 # Verdict ordering for scan_repo: best candidates first.
 _VERDICT_RANK = {"GO": 0, "CAUTION": 1, "TAKEN": 2}
 
@@ -79,6 +104,11 @@ def check_issue(
     labels on the issue) and `welcoming` (repo-level signs contributions
     are welcome), the same markers `scan_repo` returns.
 
+    Error payloads carry `error` plus `error_code`: RateLimitError ->
+    `rate_limited`, NotFoundError -> `not_found`, HTTP 401/CLI authentication
+    failures -> `auth_failed`, subprocess timeouts -> `timeout`, other
+    TakenError failures -> `unknown`.
+
     Args:
         owner: repository owner login
         repo: repository name
@@ -90,8 +120,8 @@ def check_issue(
     mode = "persistent" if persistent_session else ("graphql" if graphql else "rest")
     try:
         return _check_one(owner, repo, issue_number, me=me, mode=mode)
-    except checks.TakenError as exc:
-        return {"target": f"{owner}/{repo}#{issue_number}", "error": str(exc)}
+    except (checks.TakenError, subprocess.TimeoutExpired) as exc:
+        return {"target": f"{owner}/{repo}#{issue_number}", **_error_payload(exc)}
 
 
 def scan_repo(
@@ -118,6 +148,11 @@ def scan_repo(
     `welcoming` (repo-level signs contributions are welcome), so an agent
     can prefer the safest issues to adopt.
 
+    Error payloads carry `error` plus `error_code`: RateLimitError ->
+    `rate_limited`, NotFoundError -> `not_found`, HTTP 401/CLI authentication
+    failures -> `auth_failed`, subprocess timeouts -> `timeout`, other
+    TakenError failures -> `unknown`.
+
     Args:
         owner: repository owner login
         repo: repository name
@@ -128,11 +163,11 @@ def scan_repo(
     effective_parameters = {"limit": limit, "label": label, "me": me}
     try:
         issues = checks.list_open_issues(owner, repo, limit=limit, label=label)
-    except checks.TakenError as exc:
+    except (checks.TakenError, subprocess.TimeoutExpired) as exc:
         return {
             "target": f"{owner}/{repo}",
             "effective_parameters": effective_parameters,
-            "error": str(exc),
+            **_error_payload(exc),
         }
     results = []
     for issue_owner, issue_repo, number in issues:
@@ -148,8 +183,10 @@ def scan_repo(
                     "welcoming": checks.welcoming_signals(findings),
                 }
             )
-        except checks.TakenError as exc:
-            results.append({"target": f"{issue_owner}/{issue_repo}#{number}", "error": str(exc)})
+        except (checks.TakenError, subprocess.TimeoutExpired) as exc:
+            results.append(
+                {"target": f"{issue_owner}/{issue_repo}#{number}", **_error_payload(exc)}
+            )
     results.sort(key=lambda r: _VERDICT_RANK.get(str(r.get("verdict") or ""), 3))
     summary = {"GO": 0, "CAUTION": 0, "TAKEN": 0, "errors": 0}
     for item in results:
@@ -201,6 +238,11 @@ def discover_candidates(
     carries `friendly_labels` (first-time-contributor labels on the issue)
     and `welcoming` (repo-level signs contributions are welcome).
 
+    Error payloads carry `error` plus `error_code`: RateLimitError ->
+    `rate_limited`, NotFoundError -> `not_found`, HTTP 401/CLI authentication
+    failures -> `auth_failed`, subprocess timeouts -> `timeout`, other
+    TakenError failures -> `unknown`.
+
     Args:
         limit: max candidates to return (default 10)
         language: only consider repos in this language
@@ -226,12 +268,12 @@ def discover_candidates(
             jobs=discover.DEFAULT_JOBS,
             on_progress=None,
         )
-    except checks.TakenError as exc:
-        return {"effective_parameters": effective_parameters, "error": str(exc)}
+    except (checks.TakenError, subprocess.TimeoutExpired) as exc:
+        return {"effective_parameters": effective_parameters, **_error_payload(exc)}
     return {
         "effective_parameters": effective_parameters,
         "search_errors": [
-            {"label": label, "error": error}
+            {"label": label, **_error_payload(checks.TakenError(error))}
             for label, error in getattr(results, "search_errors", [])
         ],
         "results": [

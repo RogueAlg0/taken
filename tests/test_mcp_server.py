@@ -1,6 +1,7 @@
 """Tests for the taken MCP server tools."""
 
 import asyncio
+import subprocess
 from datetime import datetime, timezone
 
 import pytest
@@ -127,7 +128,7 @@ def test_check_issue_returns_error_dict(monkeypatch):
 
     monkeypatch.setattr(checks, "gh_api", boom)
     payload = check_issue("octo", "repo", 1)
-    assert payload == {"target": "octo/repo#1", "error": "network down"}
+    assert payload == {"target": "octo/repo#1", "error": "network down", "error_code": "unknown"}
 
 
 def test_check_issue_carries_friendly_and_welcoming(monkeypatch):
@@ -192,6 +193,7 @@ def test_scan_repo_error_dict(monkeypatch):
         "target": "octo/repo",
         "effective_parameters": {"limit": 7, "label": "help wanted", "me": "octocat"},
         "error": "repo gone",
+        "error_code": "unknown",
     }
 
 
@@ -267,6 +269,7 @@ def test_discover_candidates_error_echoes_effective_parameters(monkeypatch):
             "me": "octocat",
         },
         "error": "search unavailable",
+        "error_code": "unknown",
     }
 
 
@@ -315,3 +318,31 @@ def test_main_without_mcp_prints_guidance(monkeypatch, capsys):
     assert ms.main() == 2
     err = capsys.readouterr().err
     assert "taken-gh[mcp]" in err
+
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (checks.RateLimitError("rate limit reached"), "rate_limited"),
+        (checks.NotFoundError("repository missing"), "not_found"),
+        (checks.TakenError("Bad credentials (HTTP 401)"), "auth_failed"),
+        (subprocess.TimeoutExpired("gh api", 60), "timeout"),
+        (checks.TakenError("`gh api repos/octo/repo` timed out after 60s"), "timeout"),
+        (checks.TakenError("network down"), "unknown"),
+    ],
+)
+@pytest.mark.parametrize("tool", ["check_issue", "scan_repo", "discover_candidates"])
+def test_tools_return_machine_readable_error_codes(monkeypatch, error, code, tool):
+    def boom(*args, **kwargs):
+        raise error
+
+    if tool == "discover_candidates":
+        monkeypatch.setattr(discover, "discover", boom)
+        payload = discover_candidates()
+    else:
+        monkeypatch.setattr(checks, "gh_api", boom)
+        payload = (
+            check_issue("octo", "repo", 1) if tool == "check_issue" else scan_repo("octo", "repo")
+        )
+    assert payload["error_code"] == code
+    assert payload["error"] == str(error)
