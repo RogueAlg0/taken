@@ -9,6 +9,7 @@ anywhere. No aggregator filters on that.
 
 import concurrent.futures
 import threading
+from collections import deque
 from datetime import datetime, timedelta, timezone
 
 from . import budget, checks, graphql
@@ -132,6 +133,18 @@ def score_candidate(findings, updated_at, engaged):
     return points, why
 
 
+def _score_ceiling(updated_at):
+    """Max score a candidate can still reach, from its known updated_at.
+
+    score_candidate awards at most 3 (maintainer reply) + 2 (updated within
+    7 days) + 1 (repo pushed within 7 days). The +2 recency points are gone
+    for candidates updated more than 7 days ago. An unparseable timestamp
+    is conservatively treated as fresh (ceiling 6): never assume stale.
+    """
+    age_days = _days_ago(updated_at)
+    return 6 if age_days is None or age_days <= 7 else 4
+
+
 def _verify_candidate(owner, repo, number, item, min_contributors, me, mode="rest"):
     """Run the full check on one candidate.
 
@@ -193,15 +206,21 @@ class DiscoverResults(list):
 
     errors: candidates that failed with TakenError instead of a verdict.
     total: candidates that entered the verify pool.
+    verified: candidates whose verification was submitted to the pool
+        (<= total; strictly lower when the #214 early stop fires before
+        the queue drains). Counts submitted work, not consumed
+        completions, so it measures the API spend the stop is meant to
+        save.
     search_errors: [(label, error)] for label searches that failed during
     the per-label fallback; empty when the combined search succeeded, so
     callers can tell "partial results" apart from "everything worked".
     """
 
-    def __init__(self, items=(), *, errors=0, total=0, search_errors=()):
+    def __init__(self, items=(), *, errors=0, total=0, verified=0, search_errors=()):
         super().__init__(items)
         self.errors = errors
         self.total = total
+        self.verified = verified
         self.search_errors = list(search_errors)
 
 
@@ -320,6 +339,17 @@ def discover(
     reasons, findings, updated_at, friendly_labels (first-time-contributor
     labels on the issue), welcoming (repo-level signs contributions are
     welcome).
+
+    Verification stops early (issue #214) once the top-`limit` ranking is
+    provably decided: when `limit` banked GO candidates all score strictly
+    above the highest score any not-yet-banked candidate can still reach
+    (from its known updated_at), the remaining pool cannot change the
+    output. Submission is rolling and bounded: at most `jobs` candidates
+    are ever in flight, and the stop proof is evaluated after every
+    completion before replacement work is submitted, so no candidate is
+    submitted once the ranking is decided. .verified reports how many
+    candidates were actually submitted, so callers can distinguish a pool
+    of 80 verified in full from one cut short at 23.
     """
     # A negative limit is meaningless; clamp to 0 (empty result) instead of
     # letting ranked[:limit] silently drop the top candidates. This also
@@ -334,30 +364,87 @@ def discover(
     total = len(candidates)
     if on_progress is not None:
         on_progress(0, total)
+    if limit == 0:
+        # Nothing can make the cut; skip verification entirely.
+        return DiscoverResults([], errors=0, total=total, verified=0, search_errors=search_errors)
     ranked = []
     errors = 0
+    verified = 0
+    banked_scores = []
     workers = max(1, jobs)
+    # Rolling submission (issue #214): at most `workers` candidates are in
+    # flight at any time. The stop proof is evaluated after every
+    # completion and BEFORE replacement work is submitted, so no candidate
+    # is ever submitted once the top-`limit` ranking is decided. (Eagerly
+    # submitting the whole pool up front would let fast workers start
+    # every verification before the proof can fire, doing all the API work
+    # the stop exists to save.) Ceilings cover every candidate that has
+    # not banked a score yet: queued and in-flight alike.
+    ceilings = {
+        idx: _score_ceiling(item.get("updated_at"))
+        for idx, (_, _, _, item) in enumerate(candidates)
+    }
+    queue = deque(range(len(candidates)))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {
-            pool.submit(_verify_candidate, owner, repo, number, item, min_contributors, me, mode): (
-                owner,
-                repo,
-                number,
+        in_flight = {}
+
+        def submit_next():
+            nonlocal verified
+            idx = queue.popleft()
+            owner, repo, number, item = candidates[idx]
+            future = pool.submit(
+                _verify_candidate, owner, repo, number, item, min_contributors, me, mode
             )
-            for owner, repo, number, item in candidates
-        }
+            in_flight[future] = idx
+            # .verified counts submitted verification work, not consumed
+            # completions: one submission is one _verify_candidate run.
+            # Nothing is ever cancelled, so every submission runs.
+            verified += 1
+
+        def ranking_decided():
+            remaining_ceiling = max(ceilings.values(), default=-1)
+            return sum(1 for s in banked_scores if s > remaining_ceiling) >= limit
+
+        while queue and len(in_flight) < workers:
+            submit_next()
         done = 0
-        for future in concurrent.futures.as_completed(futures):
-            done += 1
-            if on_progress is not None:
-                on_progress(done, total)
-            entry, error = future.result()
-            if error is not None:
-                errors += 1
-            elif entry is not None:
-                ranked.append(entry)
+        stopped = False
+        while in_flight and not stopped:
+            finished, _ = concurrent.futures.wait(
+                in_flight, return_when=concurrent.futures.FIRST_COMPLETED
+            )
+            for future in finished:
+                idx = in_flight.pop(future)
+                del ceilings[idx]
+                entry, error = future.result()
+                done += 1
+                if on_progress is not None:
+                    on_progress(done, total)
+                if error is not None:
+                    errors += 1
+                elif entry is not None:
+                    ranked.append(entry)
+                    banked_scores.append(entry["score"])
+                if ranking_decided():
+                    # The top-`limit` ranking is decided: no remaining
+                    # candidate can displace the banked top-`limit`, so
+                    # the rest of the queue is never submitted. In-flight
+                    # futures finish during executor shutdown; their
+                    # results are discarded (a bounded overrun of at most
+                    # `workers - 1` extra verifications).
+                    stopped = True
+                    break
+            if not stopped:
+                while queue and len(in_flight) < workers:
+                    submit_next()
     # Score desc, then recency desc: the freshest candidate wins ties.
     # (A single sort; the old double-sort accidentally left equal scores
     # oldest-first because the second stable sort preserved the first.)
     ranked.sort(key=lambda r: (r["score"], r["updated_at"]), reverse=True)
-    return DiscoverResults(ranked[:limit], errors=errors, total=total, search_errors=search_errors)
+    return DiscoverResults(
+        ranked[:limit],
+        errors=errors,
+        total=total,
+        verified=verified,
+        search_errors=search_errors,
+    )
