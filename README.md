@@ -237,6 +237,10 @@ TAKEN wins over CAUTION, which wins over GO.
 The claimant scan is a heuristic over comment text, not proof. The verdict
 always prints its evidence so you can judge for yourself.
 
+The stale-claim decay flags `--pr-idle-days`, `--claim-silence-days`, and
+`--claim-silence-complex-days` accept non-negative day counts; negative
+values are rejected before checks run.
+
 ## Development
 
     uv sync          # install dev tools (ruff, pytest)

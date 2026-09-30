@@ -46,6 +46,13 @@ def _parse_error(text):
     return 3
 
 
+def _non_negative_int(value):
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError("must be non-negative")
+    return number
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="taken",
@@ -157,7 +164,7 @@ def build_parser():
     )
     parser.add_argument(
         "--pr-idle-days",
-        type=int,
+        type=_non_negative_int,
         default=checks.DEFAULT_PR_IDLE_DAYS,
         metavar="N",
         help="stale-claim decay: an open linked PR with no activity for longer than N days "
@@ -165,7 +172,7 @@ def build_parser():
     )
     parser.add_argument(
         "--claim-silence-days",
-        type=int,
+        type=_non_negative_int,
         default=checks.DEFAULT_CLAIM_SILENCE_DAYS,
         metavar="N",
         help="stale-claim decay: days one claim blocks as CAUTION on a simple issue; "
@@ -174,7 +181,7 @@ def build_parser():
     )
     parser.add_argument(
         "--claim-silence-complex-days",
-        type=int,
+        type=_non_negative_int,
         default=checks.DEFAULT_CLAIM_SILENCE_COMPLEX_DAYS,
         metavar="N",
         help="stale-claim decay: days one claim blocks as CAUTION on a complex issue "

@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Reject negative stale-claim decay thresholds with a clear CLI error (#239).
+
 ### Changed
 - Stale-claim decay, validated half (issue #83): every claimant hit and
   every linked PR now carries an age label in the findings ("expressed
