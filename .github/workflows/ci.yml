@@ -79,7 +79,7 @@ jobs:
       - name: Check vendored docs copies match taken/
         run: |
           fail=0
-          for pair in "taken/checks.py docs/py/checks.py" "taken/verdict.py docs/py/verdict.py"; do
+          for pair in "taken/checks.py docs/console/py/checks.py" "taken/verdict.py docs/console/py/verdict.py"; do
             set -- $pair
             if ! diff -q "$1" "$2" > /dev/null; then
               echo "::error::$2 is out of sync with $1"
@@ -88,7 +88,7 @@ jobs:
             fi
           done
           if [ "$fail" -ne 0 ]; then
-            echo 'Re-copy with: cp taken/checks.py docs/py/checks.py && cp taken/verdict.py docs/py/verdict.py'
+            echo 'Re-copy with: cp taken/checks.py docs/console/py/checks.py && cp taken/verdict.py docs/console/py/verdict.py'
             exit 1
           fi
       - name: Check webshim version matches package version
@@ -96,9 +96,9 @@ jobs:
           python3 - <<'EOF'
           import re, sys
           pkg = re.search(r'^version = "(.*)"', open('pyproject.toml').read(), re.M).group(1)
-          shim = open('docs/py/webshim.py').read()
+          shim = open('docs/console/py/webshim.py').read()
           if f"taken {pkg} (Pyodide" not in shim:
-              print(f"::error::docs/py/webshim.py version string does not match pyproject.toml ({pkg})")
+              print(f"::error::docs/console/py/webshim.py version string does not match pyproject.toml ({pkg})")
               print("Update the hardcoded version in the 'taken --version' branch of run_command().")
               sys.exit(1)
           print(f"webshim version matches pyproject ({pkg})")

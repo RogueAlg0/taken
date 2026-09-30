@@ -22,7 +22,7 @@ In plain terms, it checks an issue before you start work: is it still open to
 contributions, is anyone already on it, and is the repo responsive enough that
 your PR will get reviewed.
 
-Try it without installing anything: the [live console](https://roguealg0.github.io/taken/)
+Try it without installing anything: the [live console](https://roguealg0.github.io/taken/console/)
 runs the real checks in your browser.
 
 The catch it was built for: GitHub shows "linked a pull request" events in the

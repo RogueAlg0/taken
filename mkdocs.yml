@@ -1,0 +1,44 @@
+# MkDocs Material site for taken. Built output is deployed to GitHub Pages
+# by .github/workflows/docs.yml; never commit the built site/ directory.
+site_name: taken?
+site_description: Check whether a GitHub issue is already taken before you volunteer for it.
+site_url: https://roguealg0.github.io/taken/
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to light mode
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to dark mode
+  features:
+    - navigation.tabs
+    - navigation.top
+    - search.suggest
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - codehilite:
+      guess_lang: false
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Live console: console/index.html
+  - takendocs: takendocs.md
+  - Architecture: ARCHITECTURE.md
+  - Contributing: CONTRIBUTING.md
+  - Changelog: CHANGELOG.md
+  - Security: SECURITY.md
+  - License: LICENSE

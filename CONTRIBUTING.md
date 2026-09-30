@@ -44,9 +44,9 @@ Run these three commands. CI runs the same ones:
 
 ## Two gotchas
 
-- **Vendored docs copies.** `docs/py/checks.py` and `docs/py/verdict.py` are
+- **Vendored docs copies.** `docs/console/py/checks.py` and `docs/console/py/verdict.py` are
   byte-copies of `taken/checks.py` and `taken/verdict.py` for the in-browser
-  docs console. If you touch the pipeline files, re-copy them into `docs/py/`.
+  docs console. If you touch the pipeline files, re-copy them into `docs/console/py/`.
   CI checks the copies are in sync and fails the PR otherwise.
 - **The tool is read-only by design.** It must never write anything to the
   GitHub API: no comments, no labels, no state changes, only GET requests.

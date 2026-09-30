@@ -8,7 +8,7 @@ every heuristic, every verdict rule is the real code.
 
 Notes for maintainers:
 - checks.py / verdict.py in this directory are byte-copies of main at the
-  time of the last refresh (see git log for docs/py/checks.py). Re-copy
+  time of the last refresh (see git log for docs/console/py/checks.py). Re-copy
   them when the pipeline changes; verify with diff.
 - MAX_SCAN_PAGES is capped at 1 here to respect GitHub's unauthenticated
   budget (60 req/hour per visitor). The CLI scans deeper.
