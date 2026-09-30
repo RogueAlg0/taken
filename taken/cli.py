@@ -6,7 +6,7 @@ import re
 import sys
 import time
 
-from taken import __version__, checks, discover, graphql
+from taken import __version__, budget, checks, discover, graphql
 from taken.verdict import CAUTION, GO, TAKEN, decide
 
 EXIT_CODES = {GO: 0, TAKEN: 1, CAUTION: 2}
@@ -34,6 +34,15 @@ def parse_target(text):
         owner, repo = match.groups()
         return ("repo", owner, repo)
     return None
+
+
+def _parse_error(text):
+    """Print the standard unparseable-target error; return exit code 3."""
+    print(
+        f"error: could not parse {text!r}; use owner/repo#123, an issue URL, or owner/repo to scan",
+        file=sys.stderr,
+    )
+    return 3
 
 
 def build_parser():
@@ -254,6 +263,11 @@ def main(argv=None):
     if not targets:
         parser.error("need at least one target, --file, or --discover")
     if len(targets) == 1:
+        if not parse_target(targets[0]):
+            # Fail before _run_with_stats: a usage error must exit 3
+            # without touching the network, so the budget identity probe
+            # (and any other subprocess call) must not fire.
+            return _parse_error(targets[0])
         return _run_with_stats(run_single, targets[0], args, verbose=args.verbose, debug=args.debug)
     return _run_with_stats(run_batch, targets, args, verbose=args.verbose, debug=args.debug)
 
@@ -266,7 +280,11 @@ def _run_with_stats(func, *fargs, verbose=False, debug=False):
     state before/after, retries, backoff time). Both go to stderr so
     --json stdout stays clean for piping, and both print even when the
     run fails (exit 3), which is exactly when the numbers matter most.
+
+    The budget line (tier + requests used) prints on every run, verbose
+    or not: per-run accounting is local only, never telemetry.
     """
+    budget.activate()
     checks.reset_api_stats()
     rate_start = checks.rate_limit_snapshot() if debug else None
     start = time.perf_counter()
@@ -275,6 +293,7 @@ def _run_with_stats(func, *fargs, verbose=False, debug=False):
     finally:
         total = time.perf_counter() - start
         rate_end = checks.rate_limit_snapshot() if debug else None
+        print(checks.budget_line(), file=sys.stderr)
         if verbose or debug:
             print(checks.api_stats_summary(), file=sys.stderr)
         if debug:
@@ -359,6 +378,7 @@ def run_discover(args):
             print("no candidates passed verification", file=sys.stderr)
         return 0
     if args.json:
+        budget = checks.budget_report()
         print(
             json.dumps(
                 [
@@ -371,6 +391,7 @@ def run_discover(args):
                         "findings": r["findings"],
                         "friendly_labels": r["friendly_labels"],
                         "welcoming": r["welcoming"],
+                        "budget": budget,
                     }
                     for r in results
                 ],
@@ -420,12 +441,7 @@ def run_clear_cache():
 def run_single(text, args):
     parsed = parse_target(text)
     if not parsed:
-        print(
-            f"error: could not parse {text!r}; "
-            "use owner/repo#123, an issue URL, or owner/repo to scan",
-            file=sys.stderr,
-        )
-        return 3
+        return _parse_error(text)
     if parsed[0] == "repo":
         return run_batch([text], args)
     _, owner, repo, number = parsed
@@ -439,7 +455,13 @@ def run_single(text, args):
     if args.json:
         print(
             json.dumps(
-                {"target": target, "verdict": verdict, "reasons": reasons, "findings": findings},
+                {
+                    "target": target,
+                    "verdict": verdict,
+                    "reasons": reasons,
+                    "findings": findings,
+                    "budget": checks.budget_report(),
+                },
                 indent=2,
             )
         )
@@ -470,11 +492,7 @@ def run_batch(targets, args):
     for text in targets:
         parsed = parse_target(text)
         if not parsed:
-            print(
-                f"error: could not parse {text!r}; "
-                "use owner/repo#123, an issue URL, or owner/repo to scan",
-                file=sys.stderr,
-            )
+            _parse_error(text)
             failed = True
             continue
         if parsed[0] == "repo":
@@ -505,6 +523,7 @@ def run_batch(targets, args):
                 print(f"error: {text}: {exc}", file=sys.stderr)
                 failed = True
     if args.json:
+        budget = checks.budget_report()
         print(
             json.dumps(
                 [
@@ -513,6 +532,7 @@ def run_batch(targets, args):
                         "verdict": verdict,
                         "reasons": reasons,
                         "findings": findings,
+                        "budget": budget,
                     }
                     for target, verdict, reasons, findings in results
                 ],

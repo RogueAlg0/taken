@@ -11,13 +11,21 @@ import concurrent.futures
 import threading
 from datetime import datetime, timedelta, timezone
 
-from . import checks, graphql
+from . import budget, checks, graphql
 from .verdict import GO, decide
 
 SEARCH_LABELS = ["good first issue", "good-first-issue", "beginner friendly", "help wanted"]
 SEARCH_PER_PAGE = 50
+# Baseline verify-pool size; the authenticated budget tier raises it
+# (see taken/budget.py).
 VERIFY_POOL = 40
 DEFAULT_JOBS = 8
+
+
+def _verify_pool_size():
+    """Candidates fully verified per run: baseline, raised when logged in."""
+    return budget.effective_cap(VERIFY_POOL, "discover_pool")
+
 
 # author_association values that mean the commenter can speak for the repo.
 # A random "+1" from a passerby (NONE/CONTRIBUTOR/...) is not maintainer
@@ -246,7 +254,7 @@ def _collect_candidates(labels, language, updated_after):
         items = checks.search_issues(query, per_page=SEARCH_PER_PAGE)
     except checks.TakenError:
         return _collect_candidates_per_label(labels, language, updated_after)
-    candidates = _pool_from_items(items, set(), VERIFY_POOL)
+    candidates = _pool_from_items(items, set(), _verify_pool_size())
     searched = [(", ".join(labels), len(items))]
     return candidates, searched, []
 
@@ -271,8 +279,8 @@ def _collect_candidates_per_label(labels, language, updated_after):
             search_errors.append((label, str(exc)))
             continue
         searched.append((label, len(items)))
-        candidates.extend(_pool_from_items(items, seen, VERIFY_POOL - len(candidates)))
-        if len(candidates) >= VERIFY_POOL:
+        candidates.extend(_pool_from_items(items, seen, _verify_pool_size() - len(candidates)))
+        if len(candidates) >= _verify_pool_size():
             break
     if not candidates and search_errors and not searched:
         # Every label failed: re-raise instead of returning an empty

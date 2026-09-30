@@ -26,7 +26,7 @@ except ImportError:  # pydantic ships with the `mcp` dependency
         return kwargs
 
 
-from taken import __version__, checks, discover, graphql
+from taken import __version__, budget, checks, discover, graphql
 from taken.verdict import decide
 
 
@@ -56,6 +56,7 @@ def _check_one(owner, repo, number, me=None, mode=None, payload=None):
         "findings": findings,
         "friendly_labels": checks.friendly_labels(findings),
         "welcoming": checks.welcoming_signals(findings),
+        "budget": checks.budget_report(),
     }
 
 
@@ -180,6 +181,7 @@ def scan_repo(
         "results": results,
         "recommendations": [r["target"] for r in results if r.get("verdict") == "GO"],
         "summary": summary,
+        "budget": checks.budget_report(),
     }
 
 
@@ -264,6 +266,7 @@ def discover_candidates(
             }
             for item in results
         ],
+        "budget": checks.budget_report(),
     }
 
 
@@ -295,12 +298,7 @@ except ImportError:  # `mcp` is required; this only triggers on a broken install
 
 def main():
     """Entry point for the ``taken-mcp`` console script."""
-    try:
-        from taken import budget
-    except ImportError:
-        pass  # taken/budget.py arrives with #223; anonymous caps apply meanwhile
-    else:
-        budget.activate()
+    budget.activate()
     if mcp is None:
         print(
             "taken-mcp needs the MCP SDK, which ships with taken-gh: "

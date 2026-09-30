@@ -16,6 +16,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   place for a future budget tier to pick the pipe.
 - GraphQL findings now include `"stages_skipped": []` for shape parity with
   the REST path (the GraphQL path always runs every stage).
+- Budget-aware engine: the engine now picks a budget tier at startup from
+  the authenticated `gh` identity (the same memoized probe `fetch_mode`
+  uses, so this costs no extra subprocess). Anonymous callers keep today's
+  exact lean behavior (60/hr console budget); authenticated callers get
+  deeper comment/timeline scans, more repo-health pages, and a larger
+  discover candidate pool (5,000/hr budget). Every run prints a one-line
+  budget accounting to stderr, and `--json` / MCP payloads carry a `budget`
+  object. All accounting is local; no telemetry.
 - README now states what taken is for (in plain terms) before how it works,
   and links the live in-browser console.
 - CI now fails if the `taken --version` string in `docs/py/webshim.py`
