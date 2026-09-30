@@ -383,13 +383,20 @@ def run_discover(args):
     return 0
 
 
-def check_one(owner, repo, number, me, mode="rest"):
+def check_one(owner, repo, number, me, mode="rest", payload=None):
     """Run the full check on one issue. Returns (target, verdict, reasons, findings).
 
     GraphQL-family modes fall back to REST per issue when the GraphQL
     transport fails; the fallback is recorded in the findings.
+
+    `payload` is an optional pre-fetched issue item (e.g. from
+    list_open_issues): on the REST path it skips the per-issue refetch
+    (issue #211). The GraphQL path issues one combined query per issue
+    and cannot reuse a REST item, so the payload is ignored there.
     """
-    findings = graphql.run_checks_with_fallback(owner, repo, number, me=me, mode=mode)
+    findings = graphql.run_checks_with_fallback(
+        owner, repo, number, me=me, mode=mode, payload=payload
+    )
     verdict, reasons = decide(findings)
     return f"{owner}/{repo}#{number}", verdict, reasons, findings
 
@@ -481,11 +488,14 @@ def run_batch(targets, args):
                 continue
             if not issues:
                 print(f"note: {text}: no open issues found", file=sys.stderr)
-            for issue_owner, issue_repo, number in issues:
+            for item in issues:
+                number = item["number"]
                 try:
-                    results.append(check_one(issue_owner, issue_repo, number, args.me, mode=mode))
+                    # The listing already fetched this issue: pass it as
+                    # payload so check_issue() skips the redundant GET.
+                    results.append(check_one(owner, repo, number, args.me, mode=mode, payload=item))
                 except checks.TakenError as exc:
-                    print(f"error: {issue_owner}/{issue_repo}#{number}: {exc}", file=sys.stderr)
+                    print(f"error: {owner}/{repo}#{number}: {exc}", file=sys.stderr)
                     failed = True
         else:
             _, owner, repo, number = parsed

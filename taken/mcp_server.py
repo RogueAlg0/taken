@@ -30,19 +30,18 @@ from taken import __version__, checks, discover, graphql
 from taken.verdict import decide
 
 
-def _check_one(owner, repo, number, me=None, mode=None):
+def _check_one(owner, repo, number, me=None, mode="rest", payload=None):
     """Run the full check suite on one issue; return the tool payload.
 
-    ``mode`` selects the fetch path ("rest", "graphql", "persistent");
-    None resolves through ``graphql.fetch_mode()``, so a logged-in MCP
-    host gets the GraphQL default and an anonymous one stays on REST,
-    exactly like the CLI. GraphQL-family modes fall back to REST when
-    the GraphQL transport fails; the fallback is recorded in the
-    findings.
+    GraphQL-family modes fall back to REST when the GraphQL transport
+    fails; the fallback is recorded in the findings.
+
+    `payload` is an optional pre-fetched issue item: on the REST path it
+    skips the per-issue refetch (issue #211).
     """
-    if mode is None:
-        mode = graphql.fetch_mode()
-    findings = graphql.run_checks_with_fallback(owner, repo, number, me=me, mode=mode)
+    findings = graphql.run_checks_with_fallback(
+        owner, repo, number, me=me, mode=mode, payload=payload
+    )
     verdict, reasons = decide(findings)
     return {
         "target": f"{owner}/{repo}#{number}",
@@ -65,13 +64,13 @@ def check_issue(
     me: str | None = None,
     graphql: Annotated[
         bool,
-        Field(description="Force the GraphQL path. Default: automatic from auth state."),
+        Field(description="Fetch via one GraphQL query (gh api graphql) instead of REST. Opt-in."),
     ] = False,
     persistent_session: Annotated[
         bool,
         Field(
-            description="Force the persistent-session GraphQL path; token from "
-            "`gh auth token` held in memory only. Default: automatic from auth state."
+            description="GraphQL over one persistent HTTPS connection; token from "
+            "`gh auth token` held in memory only. Opt-in."
         ),
     ] = False,
 ) -> dict:
@@ -90,12 +89,10 @@ def check_issue(
         repo: repository name
         issue_number: issue number to check
         me: your GitHub login; your own comments are ignored in the claimant scan
-        graphql: force the GraphQL fetch path instead of the automatic choice
-        persistent_session: force the persistent-session GraphQL path instead of the automatic one
+        graphql: use the GraphQL fetch path (subprocess) instead of REST
+        persistent_session: use the persistent-session GraphQL path instead of REST
     """
-    # Explicit flags win; otherwise the transport is automatic from auth
-    # state (GraphQL when logged in, REST when anonymous), like the CLI.
-    mode = "persistent" if persistent_session else ("graphql" if graphql else None)
+    mode = "persistent" if persistent_session else ("graphql" if graphql else "rest")
     try:
         return _check_one(owner, repo, issue_number, me=me, mode=mode)
     except checks.TakenError as exc:
@@ -143,9 +140,12 @@ def scan_repo(
             "error": str(exc),
         }
     results = []
-    for issue_owner, issue_repo, number in issues:
+    for item in issues:
+        number = item["number"]
         try:
-            payload = _check_one(issue_owner, issue_repo, number, me=me)
+            # The listing already fetched this issue: pass it as payload
+            # so the per-issue refetch is skipped (issue #211).
+            payload = _check_one(owner, repo, number, me=me, payload=item)
             findings = payload["findings"]
             results.append(
                 {
@@ -157,7 +157,7 @@ def scan_repo(
                 }
             )
         except checks.TakenError as exc:
-            results.append({"target": f"{issue_owner}/{issue_repo}#{number}", "error": str(exc)})
+            results.append({"target": f"{owner}/{repo}#{number}", "error": str(exc)})
     results.sort(key=lambda r: _VERDICT_RANK.get(str(r.get("verdict") or ""), 3))
     summary = {"GO": 0, "CAUTION": 0, "TAKEN": 0, "errors": 0}
     for item in results:
@@ -233,8 +233,6 @@ def discover_candidates(
             me=me,
             jobs=discover.DEFAULT_JOBS,
             on_progress=None,
-            # Automatic from auth state (GraphQL when logged in), like the CLI.
-            mode=graphql.fetch_mode(),
         )
     except checks.TakenError as exc:
         return {"effective_parameters": effective_parameters, "error": str(exc)}
@@ -287,12 +285,6 @@ except ImportError:  # `mcp` is required; this only triggers on a broken install
 
 def main():
     """Entry point for the ``taken-mcp`` console script."""
-    try:
-        from taken import budget
-    except ImportError:
-        pass  # taken/budget.py arrives with #223; anonymous caps apply meanwhile
-    else:
-        budget.activate()
     if mcp is None:
         print(
             "taken-mcp needs the MCP SDK, which ships with taken-gh: "

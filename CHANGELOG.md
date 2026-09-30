@@ -7,13 +7,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
-- MCP server gets the same GraphQL-first behavior as the CLI: `check_issue`,
-  `scan_repo`, and `discover_candidates` now resolve the fetch path through
-  `graphql.fetch_mode()` (GraphQL when logged in, REST when anonymous), with
-  REST fallback recorded in the findings. Tool schemas are unchanged; the
-  existing optional `graphql`/`persistent_session` flags still force a path,
-  and `TAKEN_REST=1` still forces REST. The MCP entry point also activates
-  the budget tier once `taken/budget.py` lands (#223).
 - GraphQL is now the default fetch path for logged-in users (`gh`
   authenticated): one query per issue instead of ~10 REST calls, with
   identical verdicts. REST remains the default for anonymous use, the
@@ -39,6 +32,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the invariants contributors must not break.
 
 ### Fixed
+- Scan mode no longer refetches issues it already holds: `list_open_issues`
+  now returns the full issue items and the CLI, MCP `scan_repo`, and web
+  console pass them as `payload=` into the check, skipping the redundant
+  per-issue GET on the REST path (the #153 mechanism). Verdicts are
+  unchanged; the GraphQL path still issues its single combined query.
 - Web console discover no longer aborts on the first failed label search: it
   now mirrors the engine's #162 partial-results behavior, keeping candidates
   from the labels that succeeded, reporting which label searches failed in

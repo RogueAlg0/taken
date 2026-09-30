@@ -363,17 +363,20 @@ def run_repo_scan(owner, repo, limit, label, me):
         "",
     ]
     gos = []
-    for issue_owner, issue_repo, number in issues:
+    for item in issues:
+        number = item["number"]
         try:
-            findings = checks.run_checks(issue_owner, issue_repo, number, me=me)
+            # The listing already fetched this issue: reuse it instead of
+            # refetching per issue (issue #211).
+            findings = checks.run_checks(owner, repo, number, me=me, payload=item)
         except checks.TakenError as exc:
-            lines.append(f"ERROR   {issue_owner}/{issue_repo}#{number}  {exc}")
+            lines.append(f"ERROR   {owner}/{repo}#{number}  {exc}")
             continue
         verdict, reasons = decide(findings)
         first = reasons[0] if reasons else ""
-        lines.append(f"{verdict:7} {issue_owner}/{issue_repo}#{number}  {first}")
+        lines.append(f"{verdict:7} {owner}/{repo}#{number}  {first}")
         if verdict == "GO":
-            gos.append((f"{issue_owner}/{issue_repo}#{number}", checks.friendly_labels(findings)))
+            gos.append((f"{owner}/{repo}#{number}", checks.friendly_labels(findings)))
     lines.append("")
     if gos:
         # First-time-friendly issues first: the safest ones to adopt.

@@ -701,7 +701,9 @@ def run_checks_graphql(owner, repo, number, me=None, mode="graphql", session=Non
     }
 
 
-def run_checks_with_fallback(owner, repo, number, me=None, mode="graphql", session=None):
+def run_checks_with_fallback(
+    owner, repo, number, me=None, mode="graphql", session=None, payload=None
+):
     """Run the check suite, falling back from GraphQL to REST on failure.
 
     GraphQL is the default transport for authenticated invokers, but it
@@ -713,9 +715,15 @@ def run_checks_with_fallback(owner, repo, number, me=None, mode="graphql", sessi
 
     ``NotFoundError`` is not a transport failure (the issue is absent on
     both paths) and is re-raised without a fallback attempt.
+
+    `payload` is a pre-fetched REST issue item (e.g. from
+    list_open_issues): on the REST path it skips check_issue()'s redundant
+    GET (issue #211). The GraphQL path issues one combined query per
+    issue, so a REST item cannot substitute for it and the payload is
+    ignored there.
     """
     if mode not in ("graphql", "persistent"):
-        findings = checks.run_checks(owner, repo, number, me=me)
+        findings = checks.run_checks(owner, repo, number, me=me, payload=payload)
         findings["transport"] = "rest"
         return findings
     try:
@@ -723,7 +731,7 @@ def run_checks_with_fallback(owner, repo, number, me=None, mode="graphql", sessi
     except checks.NotFoundError:
         raise
     except checks.TakenError as exc:
-        findings = checks.run_checks(owner, repo, number, me=me)
+        findings = checks.run_checks(owner, repo, number, me=me, payload=payload)
         findings["transport"] = "rest"
         findings["transport_fallback"] = f"{mode} transport failed ({exc}); fell back to REST"
         return findings

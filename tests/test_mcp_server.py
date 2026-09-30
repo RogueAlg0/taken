@@ -5,16 +5,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from taken import checks, discover, graphql, mcp_server
+from taken import checks, discover
 from taken.mcp_server import check_issue, discover_candidates, mcp, scan_repo
-
-
-@pytest.fixture(autouse=True)
-def _anonymous_transport_by_default(monkeypatch):
-    # Pin the identity probe so transport selection is deterministic in
-    # every environment (CI has no `gh` auth; a dev machine might).
-    # Authenticated behavior gets its own tests below.
-    monkeypatch.setattr(checks, "_github_identity", lambda: None)
 
 
 def issue_payload(number, kind="go", labels=()):
@@ -34,7 +26,12 @@ def issue_payload(number, kind="go", labels=()):
 def make_fake(states, labels_map=None):
     def fake(endpoint, params=None):
         if endpoint == "repos/octo/repo/issues":
-            return [issue_payload(n) for n in sorted(states)]
+            # The real issues endpoint returns the same full issue objects
+            # as the per-issue GET, so the listing mirrors it exactly.
+            return [
+                issue_payload(n, states.get(n, "go"), (labels_map or {}).get(n, ()))
+                for n in sorted(states)
+            ]
         if "/issues/" in endpoint:
             number = int(endpoint.split("/issues/")[1].split("/")[0])
             if endpoint.endswith("/comments"):
@@ -323,123 +320,3 @@ def test_main_without_mcp_prints_guidance(monkeypatch, capsys):
     assert ms.main() == 2
     err = capsys.readouterr().err
     assert "taken-gh[mcp]" in err
-
-
-def _stub_tool_output(monkeypatch):
-    """Replace decide/labels helpers so canned findings flow through."""
-    monkeypatch.setattr(mcp_server, "decide", lambda findings: ("GO", []))
-    monkeypatch.setattr(checks, "friendly_labels", lambda findings: [])
-    monkeypatch.setattr(checks, "welcoming_signals", lambda findings: [])
-
-
-def test_check_issue_uses_graphql_when_authenticated(monkeypatch):
-    seen = {}
-    monkeypatch.setattr(checks, "_github_identity", lambda: "someone")
-
-    def fake(owner, repo, number, me=None, mode="rest", session=None):
-        seen["mode"] = mode
-        return {"transport": mode}
-
-    monkeypatch.setattr(graphql, "run_checks_with_fallback", fake)
-    _stub_tool_output(monkeypatch)
-    payload = check_issue("octo", "repo", 1)
-    assert seen["mode"] == "graphql"
-    assert payload["verdict"] == "GO"
-    assert payload["findings"]["transport"] == "graphql"
-
-
-def test_check_issue_stays_rest_when_anonymous(monkeypatch):
-    seen = {}
-
-    def fake(owner, repo, number, me=None, mode="rest", session=None):
-        seen["mode"] = mode
-        return {"transport": mode}
-
-    monkeypatch.setattr(graphql, "run_checks_with_fallback", fake)
-    _stub_tool_output(monkeypatch)
-    payload = check_issue("octo", "repo", 1)
-    assert seen["mode"] == "rest"
-    assert payload["findings"]["transport"] == "rest"
-
-
-def test_check_issue_explicit_flags_still_win(monkeypatch):
-    seen = {}
-    monkeypatch.setattr(checks, "_github_identity", lambda: "someone")
-
-    def fake(owner, repo, number, me=None, mode="rest", session=None):
-        seen["mode"] = mode
-        return {"transport": mode}
-
-    monkeypatch.setattr(graphql, "run_checks_with_fallback", fake)
-    _stub_tool_output(monkeypatch)
-    check_issue("octo", "repo", 1, graphql=True)
-    assert seen["mode"] == "graphql"
-    check_issue("octo", "repo", 1, persistent_session=True)
-    assert seen["mode"] == "persistent"
-    monkeypatch.setenv("TAKEN_REST", "1")
-    check_issue("octo", "repo", 1)
-    assert seen["mode"] == "rest"
-
-
-def test_check_issue_graphql_fallback_is_surfaced(monkeypatch, faked):
-    monkeypatch.setattr(checks, "_github_identity", lambda: "someone")
-
-    def boom(owner, repo, number, me=None, mode="graphql", session=None):
-        raise checks.TakenError("transport down")
-
-    monkeypatch.setattr(graphql, "run_checks_graphql", boom)
-    payload = check_issue("octo", "repo", 1)
-    assert payload["findings"]["transport"] == "rest"
-    assert "transport down" in payload["findings"]["transport_fallback"]
-
-
-def test_scan_repo_resolves_mode_automatically(monkeypatch, faked):
-    seen = []
-    monkeypatch.setattr(checks, "_github_identity", lambda: "someone")
-
-    def fake(owner, repo, number, me=None, mode="rest", session=None):
-        seen.append(mode)
-        return {"transport": mode}
-
-    monkeypatch.setattr(graphql, "run_checks_with_fallback", fake)
-    _stub_tool_output(monkeypatch)
-    payload = scan_repo("octo", "repo", limit=3)
-    assert seen == ["graphql", "graphql", "graphql"]
-    assert payload["summary"] == {"GO": 3, "CAUTION": 0, "TAKEN": 0, "errors": 0}
-
-
-def test_discover_candidates_uses_automatic_mode(monkeypatch):
-    seen = {}
-
-    class FakeResults(list):
-        search_errors = []
-
-    def fake_discover(**kwargs):
-        seen.update(kwargs)
-        return FakeResults()
-
-    monkeypatch.setattr(discover, "discover", fake_discover)
-    monkeypatch.setattr(checks, "_github_identity", lambda: "someone")
-    out = discover_candidates(limit=3)
-    assert seen["mode"] == "graphql"
-    assert out["results"] == []
-    assert out["search_errors"] == []
-    # Anonymous stays on REST.
-    monkeypatch.setattr(checks, "_github_identity", lambda: None)
-    discover_candidates(limit=3)
-    assert seen["mode"] == "rest"
-
-
-def test_mcp_and_cli_verdict_parity_on_graphql_path(monkeypatch, faked):
-    from taken import cli
-
-    def fake_gql(owner, repo, number, me=None, mode="graphql", session=None):
-        findings = checks.run_checks(owner, repo, number, me=me)
-        findings["transport"] = "graphql"
-        return findings
-
-    monkeypatch.setattr(graphql, "run_checks_graphql", fake_gql)
-    mcp_payload = mcp_server._check_one("octo", "repo", 1, mode="graphql")
-    _, cli_verdict, cli_reasons, _ = cli.check_one("octo", "repo", 1, None, mode="graphql")
-    assert mcp_payload["verdict"] == cli_verdict
-    assert mcp_payload["reasons"] == cli_reasons

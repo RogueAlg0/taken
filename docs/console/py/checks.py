@@ -981,7 +981,14 @@ def check_ai_policy(owner, repo):
 
 
 def list_open_issues(owner, repo, limit=20, label=None):
-    """List open issues (not PRs) for a repo, most recently updated first."""
+    """List open issues (not PRs) for a repo, most recently updated first.
+
+    Returns the raw issue items (dicts), so callers can pass them as
+    `payload=` into run_checks() and skip the per-issue refetch of data
+    the listing already returned (issue #211). Items lacking any field
+    check_issue() needs are still safe to pass: the payload is rejected
+    and the plain GET runs instead.
+    """
     endpoint = f"repos/{owner}/{repo}/issues"
     params = {"state": "open", "per_page": "100", "sort": "updated", "direction": "desc"}
     if label:
@@ -996,7 +1003,7 @@ def list_open_issues(owner, repo, limit=20, label=None):
         for item in items:
             if "pull_request" in item:
                 continue
-            found.append((owner, repo, item["number"]))
+            found.append(item)
             if len(found) >= limit:
                 break
         if len(items) < 100:
