@@ -149,3 +149,57 @@ def test_taken_beats_caution():
     ]
     verdict, _ = decide(findings)
     assert verdict == TAKEN
+
+
+def test_caution_when_beginner_label_with_long_thread():
+    findings = base_findings()
+    findings["issue"]["labels"] = ["good first issue"]
+    findings["issue"]["comment_count"] = 42
+    verdict, reasons = decide(findings)
+    assert verdict == CAUTION
+    assert any("42 comments" in reason for reason in reasons)
+
+
+def test_long_thread_threshold_boundary():
+    findings = base_findings()
+    findings["issue"]["labels"] = ["good first issue"]
+    findings["issue"]["comment_count"] = 29
+    assert decide(findings)[0] == GO
+    findings["issue"]["comment_count"] = 30
+    assert decide(findings)[0] == CAUTION
+
+
+def test_go_when_beginner_label_with_short_thread():
+    findings = base_findings()
+    findings["issue"]["labels"] = ["good first issue"]
+    findings["issue"]["comment_count"] = 12
+    assert decide(findings)[0] == GO
+
+
+def test_go_when_long_thread_without_beginner_label():
+    findings = base_findings()
+    findings["issue"]["labels"] = ["bug"]
+    findings["issue"]["comment_count"] = 42
+    assert decide(findings)[0] == GO
+
+
+def test_caution_when_beginner_label_with_design_label():
+    findings = base_findings()
+    findings["issue"]["labels"] = ["good first issue", "needs design"]
+    verdict, reasons = decide(findings)
+    assert verdict == CAUTION
+    assert any("needs design" in reason for reason in reasons)
+
+
+def test_go_when_design_label_without_beginner_label():
+    findings = base_findings()
+    findings["issue"]["labels"] = ["needs design"]
+    assert decide(findings)[0] == GO
+
+
+def test_taken_beats_difficulty_fit_caution():
+    findings = base_findings()
+    findings["issue"]["state"] = "closed"
+    findings["issue"]["labels"] = ["good first issue", "needs design"]
+    findings["issue"]["comment_count"] = 42
+    assert decide(findings)[0] == TAKEN

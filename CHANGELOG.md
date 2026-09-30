@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Difficulty-fit heads-up: an issue carrying a beginner-friendly label now
+  yields CAUTION (instead of a bare GO) when it also shows heavier signals,
+  a long discussion thread (30+ comments) or a design-level label such as
+  `needs design` or `rfc`. The reasons are phrased as neutral context for
+  the contributor, not as a judgment on the labels.
+
 ## [0.7.3] - 2026-09-27
 
 ### Added

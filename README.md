@@ -219,7 +219,9 @@ TAKEN wins over CAUTION, which wins over GO.
 - TAKEN: the issue is closed, an open PR links to it, or someone is assigned.
 - CAUTION: a comment says someone wants it (soft claim, they may have moved
   on), a linked PR was merged but the issue is still open, the repo has an AI
-  policy to respect, or the repo looks inactive.
+  policy to respect, the repo looks inactive, or a beginner-friendly label
+  sits alongside a long discussion thread or a design-level label (worth
+  skimming before you start).
 - GO: none of the above.
 
 The claimant scan is a heuristic over comment text, not proof. The verdict
