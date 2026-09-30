@@ -194,7 +194,8 @@ Three tools:
 `scan_repo` and `discover_candidates` include `effective_parameters` in every
 response so clients can see the resolved defaults and filters behind the
 results. Their MCP input schemas also describe each optional parameter's
-default.
+default. Error payloads include a human-readable `error` and an `error_code`:
+`rate_limited`, `not_found`, `auth_failed`, `timeout`, or `unknown`.
 
 `taken` is published in the official
 [MCP Registry](https://registry.modelcontextprotocol.io) as
