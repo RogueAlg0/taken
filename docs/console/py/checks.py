@@ -18,6 +18,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from taken import budget
 from taken.verdict import FIRST_TIME_LABELS, TAKEN, decide
 
 API_TIMEOUT = 60
@@ -25,10 +26,31 @@ HEALTH_WINDOW_DAYS = 30
 CONTRIBUTORS_WINDOW_DAYS = 90
 CACHE_TTL_SECONDS = 3600
 
+# Endpoints become positional arguments to the `gh api` subprocess, so keep
+# them to a safe alphabet: no leading dash (which `gh` would parse as a
+# flag), no whitespace or control characters. Every endpoint the codebase
+# builds (repos/..., search/..., graphql, contents/...) fits this shape.
+_ENDPOINT_SAFE_RE = re.compile(r"[A-Za-z0-9_./][A-Za-z0-9_./-]*")
+
+
+def _require_safe_endpoint(endpoint):
+    """Reject an endpoint string that could not be a plain API path."""
+    if not isinstance(endpoint, str) or not _ENDPOINT_SAFE_RE.fullmatch(endpoint):
+        raise TakenError(f"refusing to call unsafe API endpoint: {endpoint!r}")
+
+
 # Timeline and comment scans page through the API instead of trusting the
 # first 100 results: on a busy issue a linked PR or a claimant comment can
 # hide on a later page, which would silently flip a verdict to GO.
+# This is the baseline cap; the authenticated budget tier may raise it
+# (see taken/budget.py), and embedders may lower it (the docs console
+# sets it to 1 for its 60/hr budget).
 MAX_SCAN_PAGES = 5
+
+# Repo-health scan depths: merged-PR pages and commit pages per repo.
+# Baselines; the authenticated budget tier may raise them.
+_REPO_PULLS_PAGES = 2
+_REPO_COMMITS_PAGES = 3
 
 # Set to False (via --no-cache) to bypass the response cache.
 _CACHE_ENABLED = True
@@ -121,21 +143,47 @@ def api_stats_data() -> dict[str, Any]:
 
 
 def api_stats_summary() -> str:
-    """One short --verbose report: totals plus per-endpoint call counts."""
+    """One short --verbose report: tier, totals, per-endpoint call counts."""
+    b = budget.current()
     with _API_STATS_LOCK:
         calls = dict(_API_STATS["calls"])
         hits = _API_STATS["cache_hits"]
         misses = _API_STATS["cache_misses"]
     total = sum(calls.values())
     lines = [
+        f"Budget tier: {b.tier} ({b.hourly_requests:,} requests/hour); {total} used this run",
         f"API usage: {total} call{'s' if total != 1 else ''}, "
         f"{hits} cache hit{'s' if hits != 1 else ''}, "
-        f"{misses} cache miss{'es' if misses != 1 else ''}"
+        f"{misses} cache miss{'es' if misses != 1 else ''}",
     ]
     for endpoint in sorted(calls):
         count = calls[endpoint]
         lines.append(f"  {endpoint}: {count} call{'s' if count != 1 else ''}")
     return "\n".join(lines)
+
+
+def budget_report() -> dict[str, Any]:
+    """JSON-serializable per-run budget accounting for --json envelopes.
+
+    Local only: built from the in-process request counters. Nothing
+    leaves the process.
+    """
+    b = budget.current()
+    return {
+        "tier": b.tier,
+        "hourly_budget": b.hourly_requests,
+        "requests_used": sum(api_stats_data()["calls"].values()),
+    }
+
+
+def budget_line() -> str:
+    """One concise stderr line: tier and requests used this run."""
+    report = budget_report()
+    return (
+        f"budget: {report['tier']} tier, "
+        f"{report['requests_used']} request{'s' if report['requests_used'] != 1 else ''} used "
+        f"({report['hourly_budget']:,}/hour)"
+    )
 
 
 def _rate_limit_epoch_to_iso(epoch):
@@ -726,6 +774,7 @@ def _gh_api_run(cmd, endpoint, paced):
 
 def gh_api(endpoint, params=None):
     """GET a GitHub API endpoint via `gh api` and return parsed JSON."""
+    _require_safe_endpoint(endpoint)
     key = _cache_key(endpoint, params)
     if _CACHE_ENABLED:
         cache_start = time.perf_counter()
@@ -757,17 +806,22 @@ def gh_api(endpoint, params=None):
 
 
 def _paged_list(endpoint, params=None):
-    """GET every page of a list endpoint, up to MAX_SCAN_PAGES.
+    """GET every page of a list endpoint, up to the page cap.
 
     Returns (items, truncated). truncated is True when the loop fetched a
     full final page at the page cap, meaning more items may exist that were
     never scanned. Stops early on a short page. Each page goes through
     _require_list, so a bad page errors out instead of silently truncating
     the scan.
+
+    The cap is MAX_SCAN_PAGES, raised by the authenticated budget tier
+    (taken/budget.py) and never lowered by it, so embedder overrides
+    such as the docs console's MAX_SCAN_PAGES = 1 keep working.
     """
+    max_pages = budget.effective_cap(MAX_SCAN_PAGES, "scan_pages")
     items = []
     truncated = False
-    for page in range(1, MAX_SCAN_PAGES + 1):
+    for page in range(1, max_pages + 1):
         batch = _require_list(
             gh_api(endpoint, {**(params or {}), "per_page": "100", "page": str(page)}),
             endpoint,
@@ -775,7 +829,7 @@ def _paged_list(endpoint, params=None):
         items.extend(batch)
         if len(batch) < 100:
             break
-        if page == MAX_SCAN_PAGES:
+        if page == max_pages:
             # Full page at the cap: the API may hold more items we did not fetch.
             truncated = True
     return items, truncated
@@ -981,7 +1035,14 @@ def check_ai_policy(owner, repo):
 
 
 def list_open_issues(owner, repo, limit=20, label=None):
-    """List open issues (not PRs) for a repo, most recently updated first."""
+    """List open issues (not PRs) for a repo, most recently updated first.
+
+    Returns the raw issue items (dicts), so callers can pass them as
+    `payload=` into run_checks() and skip the per-issue refetch of data
+    the listing already returned (issue #211). Items lacking any field
+    check_issue() needs are still safe to pass: the payload is rejected
+    and the plain GET runs instead.
+    """
     endpoint = f"repos/{owner}/{repo}/issues"
     params = {"state": "open", "per_page": "100", "sort": "updated", "direction": "desc"}
     if label:
@@ -996,7 +1057,7 @@ def list_open_issues(owner, repo, limit=20, label=None):
         for item in items:
             if "pull_request" in item:
                 continue
-            found.append((owner, repo, item["number"]))
+            found.append(item)
             if len(found) >= limit:
                 break
         if len(items) < 100:
@@ -1016,7 +1077,8 @@ def count_recent_contributors(owner, repo, days=CONTRIBUTORS_WINDOW_DAYS):
     endpoint = f"repos/{owner}/{repo}/commits"
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     authors = set()
-    for page in (1, 2, 3):
+    commits_pages = budget.effective_cap(_REPO_COMMITS_PAGES, "repo_commits_pages")
+    for page in range(1, commits_pages + 1):
         commits = _require_list(
             gh_api(endpoint, {"since": since, "per_page": "100", "page": str(page)}),
             endpoint,
@@ -1050,7 +1112,8 @@ def check_repo_health(owner, repo, window_days=HEALTH_WINDOW_DAYS):
         pushed_recently = datetime.now(timezone.utc) - pushed_dt <= timedelta(days=window_days)
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
     recent_merges = 0
-    for page in (1, 2):
+    pulls_pages = budget.effective_cap(_REPO_PULLS_PAGES, "repo_pulls_pages")
+    for page in range(1, pulls_pages + 1):
         pulls_endpoint = f"repos/{owner}/{repo}/pulls"
         prs = _require_list(
             gh_api(

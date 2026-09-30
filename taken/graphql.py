@@ -30,11 +30,12 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from taken import checks
+from taken import budget, checks
 
 # Fail-closed pagination ceilings, mirroring the REST path's scan depth:
 # comments/timeline up to 500 items (5 x 100), commits up to 300 (3 x 100),
-# merged-PR scan up to 2 pages of 50.
+# merged-PR scan up to 2 pages of 50. These are baselines: the
+# authenticated budget tier may raise them (see taken/budget.py).
 _MAX_COMMENT_PAGES = 5
 _MAX_TIMELINE_PAGES = 5
 _MAX_HISTORY_PAGES = 3
@@ -605,7 +606,7 @@ def run_checks_graphql(owner, repo, number, me=None, mode="graphql", session=Non
             lambda v: refetch(v)["issue"]["comments"],
             variables,
             "commentsAfter",
-            _MAX_COMMENT_PAGES,
+            budget.effective_cap(_MAX_COMMENT_PAGES, "gql_comment_pages"),
         )
 
     # Labels paginate like comments/timeline: an issue can carry more
@@ -620,7 +621,7 @@ def run_checks_graphql(owner, repo, number, me=None, mode="graphql", session=Non
             lambda v: refetch(v)["issue"]["labels"],
             variables,
             "labelsAfter",
-            _MAX_LABEL_PAGES,
+            budget.effective_cap(_MAX_LABEL_PAGES, "gql_label_pages"),
         )
         issue["labels"] = [n.get("name") for n in label_nodes]
 
@@ -634,7 +635,7 @@ def run_checks_graphql(owner, repo, number, me=None, mode="graphql", session=Non
             lambda v: refetch(v)["issue"]["timelineItems"],
             variables,
             "timelineAfter",
-            _MAX_TIMELINE_PAGES,
+            budget.effective_cap(_MAX_TIMELINE_PAGES, "gql_timeline_pages"),
         )
 
     branch_target = (repository.get("defaultBranchRef") or {}).get("target") or {}
@@ -648,7 +649,7 @@ def run_checks_graphql(owner, repo, number, me=None, mode="graphql", session=Non
             ),
             variables,
             "historyAfter",
-            _MAX_HISTORY_PAGES,
+            budget.effective_cap(_MAX_HISTORY_PAGES, "gql_history_pages"),
         )
         history = {**history, "nodes": history_nodes}
         repository = {
@@ -665,7 +666,7 @@ def run_checks_graphql(owner, repo, number, me=None, mode="graphql", session=Non
     pages = 1
     while (
         merged_page.get("hasNextPage")
-        and pages < _MAX_MERGE_PAGES
+        and pages < budget.effective_cap(_MAX_MERGE_PAGES, "gql_merge_pages")
         and _oldest_merged_at(merged) >= cutoff
     ):
         variables = {**variables, "prsAfter": merged_page.get("endCursor")}
@@ -701,7 +702,9 @@ def run_checks_graphql(owner, repo, number, me=None, mode="graphql", session=Non
     }
 
 
-def run_checks_with_fallback(owner, repo, number, me=None, mode="graphql", session=None):
+def run_checks_with_fallback(
+    owner, repo, number, me=None, mode="graphql", session=None, payload=None
+):
     """Run the check suite, falling back from GraphQL to REST on failure.
 
     GraphQL is the default transport for authenticated invokers, but it
@@ -713,9 +716,15 @@ def run_checks_with_fallback(owner, repo, number, me=None, mode="graphql", sessi
 
     ``NotFoundError`` is not a transport failure (the issue is absent on
     both paths) and is re-raised without a fallback attempt.
+
+    `payload` is a pre-fetched REST issue item (e.g. from
+    list_open_issues): on the REST path it skips check_issue()'s redundant
+    GET (issue #211). The GraphQL path issues one combined query per
+    issue, so a REST item cannot substitute for it and the payload is
+    ignored there.
     """
     if mode not in ("graphql", "persistent"):
-        findings = checks.run_checks(owner, repo, number, me=me)
+        findings = checks.run_checks(owner, repo, number, me=me, payload=payload)
         findings["transport"] = "rest"
         return findings
     try:
@@ -723,7 +732,7 @@ def run_checks_with_fallback(owner, repo, number, me=None, mode="graphql", sessi
     except checks.NotFoundError:
         raise
     except checks.TakenError as exc:
-        findings = checks.run_checks(owner, repo, number, me=me)
+        findings = checks.run_checks(owner, repo, number, me=me, payload=payload)
         findings["transport"] = "rest"
         findings["transport_fallback"] = f"{mode} transport failed ({exc}); fell back to REST"
         return findings

@@ -6,27 +6,27 @@
   "files": [
     {
       "file": "taken/checks.py",
-      "cc": 220,
-      "commits": 27,
-      "hotspot": 5940
+      "cc": 239,
+      "commits": 33,
+      "hotspot": 7887
     },
     {
       "file": "taken/cli.py",
-      "cc": 93,
-      "commits": 19,
-      "hotspot": 1767
-    },
-    {
-      "file": "taken/discover.py",
-      "cc": 59,
-      "commits": 14,
-      "hotspot": 826
+      "cc": 98,
+      "commits": 27,
+      "hotspot": 2646
     },
     {
       "file": "taken/graphql.py",
-      "cc": 156,
-      "commits": 5,
-      "hotspot": 780
+      "cc": 169,
+      "commits": 10,
+      "hotspot": 1690
+    },
+    {
+      "file": "taken/discover.py",
+      "cc": 69,
+      "commits": 19,
+      "hotspot": 1311
     }
   ]
 }

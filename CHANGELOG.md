@@ -16,6 +16,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   place for a future budget tier to pick the pipe.
 - GraphQL findings now include `"stages_skipped": []` for shape parity with
   the REST path (the GraphQL path always runs every stage).
+- Budget-aware engine: the engine now picks a budget tier at startup from
+  the authenticated `gh` identity (the same memoized probe `fetch_mode`
+  uses, so this costs no extra subprocess). Anonymous callers keep today's
+  exact lean behavior (60/hr console budget); authenticated callers get
+  deeper comment/timeline scans, more repo-health pages, and a larger
+  discover candidate pool (5,000/hr budget). Every run prints a one-line
+  budget accounting to stderr, and `--json` / MCP payloads carry a `budget`
+  object. All accounting is local; no telemetry.
 - README now states what taken is for (in plain terms) before how it works,
   and links the live in-browser console.
 - CI now fails if the `taken --version` string in `docs/py/webshim.py`
@@ -32,6 +40,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the invariants contributors must not break.
 
 ### Fixed
+- Scan mode no longer refetches issues it already holds: `list_open_issues`
+  now returns the full issue items and the CLI, MCP `scan_repo`, and web
+  console pass them as `payload=` into the check, skipping the redundant
+  per-issue GET on the REST path (the #153 mechanism). Verdicts are
+  unchanged; the GraphQL path still issues its single combined query.
 - Web console discover no longer aborts on the first failed label search: it
   now mirrors the engine's #162 partial-results behavior, keeping candidates
   from the labels that succeeded, reporting which label searches failed in
@@ -56,6 +69,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   one or two extra queries worst case). If the cap is ever hit, the run
   reports it as a CAUTION truncation reason through the existing honesty
   machinery instead of silently losing label context.
+
+### Changed
+- Scan and batch modes now check issues concurrently: `run_batch` (CLI) and
+  `scan_repo` (MCP) verify targets through a worker pool reusing discover's
+  ThreadPoolExecutor pattern instead of one at a time. The anonymous tier
+  stays sequential (1 worker, today's exact behavior); the authenticated
+  tier uses 8 workers. Output order and verdicts are unchanged.
 
 ## [0.7.3] - 2026-09-27
 

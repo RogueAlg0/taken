@@ -1,12 +1,13 @@
 """Command-line interface for taken."""
 
 import argparse
+import concurrent.futures
 import json
 import re
 import sys
 import time
 
-from taken import __version__, checks, discover, graphql
+from taken import __version__, budget, checks, discover, graphql
 from taken.verdict import CAUTION, GO, TAKEN, decide
 
 EXIT_CODES = {GO: 0, TAKEN: 1, CAUTION: 2}
@@ -34,6 +35,15 @@ def parse_target(text):
         owner, repo = match.groups()
         return ("repo", owner, repo)
     return None
+
+
+def _parse_error(text):
+    """Print the standard unparseable-target error; return exit code 3."""
+    print(
+        f"error: could not parse {text!r}; use owner/repo#123, an issue URL, or owner/repo to scan",
+        file=sys.stderr,
+    )
+    return 3
 
 
 def build_parser():
@@ -254,6 +264,11 @@ def main(argv=None):
     if not targets:
         parser.error("need at least one target, --file, or --discover")
     if len(targets) == 1:
+        if not parse_target(targets[0]):
+            # Fail before _run_with_stats: a usage error must exit 3
+            # without touching the network, so the budget identity probe
+            # (and any other subprocess call) must not fire.
+            return _parse_error(targets[0])
         return _run_with_stats(run_single, targets[0], args, verbose=args.verbose, debug=args.debug)
     return _run_with_stats(run_batch, targets, args, verbose=args.verbose, debug=args.debug)
 
@@ -266,7 +281,11 @@ def _run_with_stats(func, *fargs, verbose=False, debug=False):
     state before/after, retries, backoff time). Both go to stderr so
     --json stdout stays clean for piping, and both print even when the
     run fails (exit 3), which is exactly when the numbers matter most.
+
+    The budget line (tier + requests used) prints on every run, verbose
+    or not: per-run accounting is local only, never telemetry.
     """
+    budget.activate()
     checks.reset_api_stats()
     rate_start = checks.rate_limit_snapshot() if debug else None
     start = time.perf_counter()
@@ -275,6 +294,7 @@ def _run_with_stats(func, *fargs, verbose=False, debug=False):
     finally:
         total = time.perf_counter() - start
         rate_end = checks.rate_limit_snapshot() if debug else None
+        print(checks.budget_line(), file=sys.stderr)
         if verbose or debug:
             print(checks.api_stats_summary(), file=sys.stderr)
         if debug:
@@ -359,6 +379,7 @@ def run_discover(args):
             print("no candidates passed verification", file=sys.stderr)
         return 0
     if args.json:
+        budget = checks.budget_report()
         print(
             json.dumps(
                 [
@@ -371,6 +392,7 @@ def run_discover(args):
                         "findings": r["findings"],
                         "friendly_labels": r["friendly_labels"],
                         "welcoming": r["welcoming"],
+                        "budget": budget,
                     }
                     for r in results
                 ],
@@ -383,13 +405,20 @@ def run_discover(args):
     return 0
 
 
-def check_one(owner, repo, number, me, mode="rest"):
+def check_one(owner, repo, number, me, mode="rest", payload=None):
     """Run the full check on one issue. Returns (target, verdict, reasons, findings).
 
     GraphQL-family modes fall back to REST per issue when the GraphQL
     transport fails; the fallback is recorded in the findings.
+
+    `payload` is an optional pre-fetched issue item (e.g. from
+    list_open_issues): on the REST path it skips the per-issue refetch
+    (issue #211). The GraphQL path issues one combined query per issue
+    and cannot reuse a REST item, so the payload is ignored there.
     """
-    findings = graphql.run_checks_with_fallback(owner, repo, number, me=me, mode=mode)
+    findings = graphql.run_checks_with_fallback(
+        owner, repo, number, me=me, mode=mode, payload=payload
+    )
     verdict, reasons = decide(findings)
     return f"{owner}/{repo}#{number}", verdict, reasons, findings
 
@@ -413,12 +442,7 @@ def run_clear_cache():
 def run_single(text, args):
     parsed = parse_target(text)
     if not parsed:
-        print(
-            f"error: could not parse {text!r}; "
-            "use owner/repo#123, an issue URL, or owner/repo to scan",
-            file=sys.stderr,
-        )
-        return 3
+        return _parse_error(text)
     if parsed[0] == "repo":
         return run_batch([text], args)
     _, owner, repo, number = parsed
@@ -432,7 +456,13 @@ def run_single(text, args):
     if args.json:
         print(
             json.dumps(
-                {"target": target, "verdict": verdict, "reasons": reasons, "findings": findings},
+                {
+                    "target": target,
+                    "verdict": verdict,
+                    "reasons": reasons,
+                    "findings": findings,
+                    "budget": checks.budget_report(),
+                },
                 indent=2,
             )
         )
@@ -455,19 +485,22 @@ def run_batch(targets, args):
     printed at the end.
     Returns 0 when every target produced a verdict, 3 when any target
     failed to parse or its checks errored.
+
+    Target parsing and repo issue listings stay sequential (cheap, and
+    their error messages keep input order); the per-issue checks run
+    through a worker pool sized by the budget tier, reusing discover's
+    ThreadPoolExecutor pattern. Results are collected in input order,
+    so output is identical to the sequential run.
     """
     results = []
     failed = False
     scanned_repo = False
     mode = graphql.fetch_mode(args)
+    jobs = []  # (error label, owner, repo, number, payload) in input order
     for text in targets:
         parsed = parse_target(text)
         if not parsed:
-            print(
-                f"error: could not parse {text!r}; "
-                "use owner/repo#123, an issue URL, or owner/repo to scan",
-                file=sys.stderr,
-            )
+            _parse_error(text)
             failed = True
             continue
         if parsed[0] == "repo":
@@ -481,20 +514,29 @@ def run_batch(targets, args):
                 continue
             if not issues:
                 print(f"note: {text}: no open issues found", file=sys.stderr)
-            for issue_owner, issue_repo, number in issues:
-                try:
-                    results.append(check_one(issue_owner, issue_repo, number, args.me, mode=mode))
-                except checks.TakenError as exc:
-                    print(f"error: {issue_owner}/{issue_repo}#{number}: {exc}", file=sys.stderr)
-                    failed = True
+            for item in issues:
+                number = item["number"]
+                # The listing already fetched this issue: pass it as
+                # payload so check_issue() skips the redundant GET.
+                jobs.append((f"{owner}/{repo}#{number}", owner, repo, number, item))
         else:
             _, owner, repo, number = parsed
-            try:
-                results.append(check_one(owner, repo, number, args.me, mode=mode))
-            except checks.TakenError as exc:
-                print(f"error: {text}: {exc}", file=sys.stderr)
-                failed = True
+            jobs.append((text, owner, repo, number, None))
+    if jobs:
+        workers = budget.current().batch_workers
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [
+                pool.submit(check_one, owner, repo, number, args.me, mode, payload)
+                for _, owner, repo, number, payload in jobs
+            ]
+            for (label, _, _, _, _), future in zip(jobs, futures, strict=True):
+                try:
+                    results.append(future.result())
+                except checks.TakenError as exc:
+                    print(f"error: {label}: {exc}", file=sys.stderr)
+                    failed = True
     if args.json:
+        budget_info = checks.budget_report()
         print(
             json.dumps(
                 [
@@ -503,6 +545,7 @@ def run_batch(targets, args):
                         "verdict": verdict,
                         "reasons": reasons,
                         "findings": findings,
+                        "budget": budget_info,
                     }
                     for target, verdict, reasons, findings in results
                 ],

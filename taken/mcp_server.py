@@ -15,6 +15,7 @@ Never print to stdout here: it carries the JSON-RPC stream. Logs go to
 stderr only.
 """
 
+import concurrent.futures
 import subprocess
 import sys
 from typing import Annotated
@@ -27,17 +28,28 @@ except ImportError:  # pydantic ships with the `mcp` dependency
         return kwargs
 
 
-from taken import __version__, checks, discover, graphql
+from taken import __version__, budget, checks, discover, graphql
 from taken.verdict import decide
 
 
-def _check_one(owner, repo, number, me=None, mode="rest"):
+def _check_one(owner, repo, number, me=None, mode=None, payload=None):
     """Run the full check suite on one issue; return the tool payload.
 
-    GraphQL-family modes fall back to REST when the GraphQL transport
-    fails; the fallback is recorded in the findings.
+    ``mode`` selects the fetch path ("rest", "graphql", "persistent");
+    None resolves through ``graphql.fetch_mode()``, so a logged-in MCP
+    host gets the GraphQL default and an anonymous one stays on REST,
+    exactly like the CLI. GraphQL-family modes fall back to REST when
+    the GraphQL transport fails; the fallback is recorded in the
+    findings.
+
+    `payload` is an optional pre-fetched issue item: on the REST path it
+    skips the per-issue refetch (issue #211).
     """
-    findings = graphql.run_checks_with_fallback(owner, repo, number, me=me, mode=mode)
+    if mode is None:
+        mode = graphql.fetch_mode()
+    findings = graphql.run_checks_with_fallback(
+        owner, repo, number, me=me, mode=mode, payload=payload
+    )
     verdict, reasons = decide(findings)
     return {
         "target": f"{owner}/{repo}#{number}",
@@ -46,6 +58,7 @@ def _check_one(owner, repo, number, me=None, mode="rest"):
         "findings": findings,
         "friendly_labels": checks.friendly_labels(findings),
         "welcoming": checks.welcoming_signals(findings),
+        "budget": checks.budget_report(),
     }
 
 
@@ -84,13 +97,13 @@ def check_issue(
     me: str | None = None,
     graphql: Annotated[
         bool,
-        Field(description="Fetch via one GraphQL query (gh api graphql) instead of REST. Opt-in."),
+        Field(description="Force the GraphQL path. Default: automatic from auth state."),
     ] = False,
     persistent_session: Annotated[
         bool,
         Field(
-            description="GraphQL over one persistent HTTPS connection; token from "
-            "`gh auth token` held in memory only. Opt-in."
+            description="Force the persistent-session GraphQL path; token from "
+            "`gh auth token` held in memory only. Default: automatic from auth state."
         ),
     ] = False,
 ) -> dict:
@@ -114,10 +127,12 @@ def check_issue(
         repo: repository name
         issue_number: issue number to check
         me: your GitHub login; your own comments are ignored in the claimant scan
-        graphql: use the GraphQL fetch path (subprocess) instead of REST
-        persistent_session: use the persistent-session GraphQL path instead of REST
+        graphql: force the GraphQL fetch path instead of the automatic choice
+        persistent_session: force the persistent-session GraphQL path instead of the automatic one
     """
-    mode = "persistent" if persistent_session else ("graphql" if graphql else "rest")
+    # Explicit flags win; otherwise the transport is automatic from auth
+    # state (GraphQL when logged in, REST when anonymous), like the CLI.
+    mode = "persistent" if persistent_session else ("graphql" if graphql else None)
     try:
         return _check_one(owner, repo, issue_number, me=me, mode=mode)
     except (checks.TakenError, subprocess.TimeoutExpired) as exc:
@@ -169,10 +184,28 @@ def scan_repo(
             "effective_parameters": effective_parameters,
             **_error_payload(exc),
         }
+    # The per-issue checks run through a worker pool sized by the budget
+    # tier, reusing discover's ThreadPoolExecutor pattern. Futures are
+    # consumed in input order, so the stable verdict-rank sort below
+    # yields exactly the sequential output. The fetch mode is resolved
+    # once up front so the identity probe never fires concurrently.
+    mode = graphql.fetch_mode()
+    workers = budget.current().batch_workers
     results = []
-    for issue_owner, issue_repo, number in issues:
-        try:
-            payload = _check_one(issue_owner, issue_repo, number, me=me)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [
+            pool.submit(_check_one, owner, repo, item["number"], me=me, mode=mode, payload=item)
+            for item in issues
+        ]
+        for item, future in zip(issues, futures, strict=True):
+            number = item["number"]
+            try:
+                # The listing already fetched this issue: pass it as payload
+                # so the per-issue refetch is skipped (issue #211).
+                payload = future.result()
+            except (checks.TakenError, subprocess.TimeoutExpired) as exc:
+                results.append({"target": f"{owner}/{repo}#{number}", **_error_payload(exc)})
+                continue
             findings = payload["findings"]
             results.append(
                 {
@@ -182,10 +215,6 @@ def scan_repo(
                     "friendly_labels": checks.friendly_labels(findings),
                     "welcoming": checks.welcoming_signals(findings),
                 }
-            )
-        except (checks.TakenError, subprocess.TimeoutExpired) as exc:
-            results.append(
-                {"target": f"{issue_owner}/{issue_repo}#{number}", **_error_payload(exc)}
             )
     results.sort(key=lambda r: _VERDICT_RANK.get(str(r.get("verdict") or ""), 3))
     summary = {"GO": 0, "CAUTION": 0, "TAKEN": 0, "errors": 0}
@@ -201,6 +230,7 @@ def scan_repo(
         "results": results,
         "recommendations": [r["target"] for r in results if r.get("verdict") == "GO"],
         "summary": summary,
+        "budget": checks.budget_report(),
     }
 
 
@@ -267,6 +297,8 @@ def discover_candidates(
             me=me,
             jobs=discover.DEFAULT_JOBS,
             on_progress=None,
+            # Automatic from auth state (GraphQL when logged in), like the CLI.
+            mode=graphql.fetch_mode(),
         )
     except (checks.TakenError, subprocess.TimeoutExpired) as exc:
         return {"effective_parameters": effective_parameters, **_error_payload(exc)}
@@ -288,6 +320,7 @@ def discover_candidates(
             }
             for item in results
         ],
+        "budget": checks.budget_report(),
     }
 
 
@@ -319,6 +352,7 @@ except ImportError:  # `mcp` is required; this only triggers on a broken install
 
 def main():
     """Entry point for the ``taken-mcp`` console script."""
+    budget.activate()
     if mcp is None:
         print(
             "taken-mcp needs the MCP SDK, which ships with taken-gh: "
