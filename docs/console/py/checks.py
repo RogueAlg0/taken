@@ -5,6 +5,7 @@ authentication and never sees, stores, or handles any token.
 """
 
 import base64
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -1101,8 +1102,8 @@ def count_recent_contributors(owner, repo, days=CONTRIBUTORS_WINDOW_DAYS):
     return len(authors)
 
 
-def check_repo_health(owner, repo, window_days=HEALTH_WINDOW_DAYS):
-    """Check recent pushes, merged PRs, and contributor breadth as activity signals."""
+def _repo_push_info(owner, repo, window_days=HEALTH_WINDOW_DAYS):
+    """Fetch the repo record; return (pushed_at, pushed_recently)."""
     endpoint = f"repos/{owner}/{repo}"
     data = _require_dict(gh_api(endpoint), endpoint)
     pushed_at = data.get("pushed_at") or ""
@@ -1110,9 +1111,16 @@ def check_repo_health(owner, repo, window_days=HEALTH_WINDOW_DAYS):
     if pushed_at:
         pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
         pushed_recently = datetime.now(timezone.utc) - pushed_dt <= timedelta(days=window_days)
-    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    return pushed_at, pushed_recently
+
+
+def _repo_recent_merges(owner, repo, cutoff, pulls_pages):
+    """Count PRs merged since `cutoff`.
+
+    Pages stay sequential with the early break on a short page, so the
+    parallel health check issues exactly the calls the sequential one did.
+    """
     recent_merges = 0
-    pulls_pages = budget.effective_cap(_REPO_PULLS_PAGES, "repo_pulls_pages")
     for page in range(1, pulls_pages + 1):
         pulls_endpoint = f"repos/{owner}/{repo}/pulls"
         prs = _require_list(
@@ -1139,11 +1147,37 @@ def check_repo_health(owner, repo, window_days=HEALTH_WINDOW_DAYS):
                 recent_merges += 1
         if len(prs) < 50:
             break
+    return recent_merges
+
+
+def check_repo_health(owner, repo, window_days=HEALTH_WINDOW_DAYS):
+    """Check recent pushes, merged PRs, and contributor breadth as activity signals.
+
+    The repo record, the pulls scan, and the commits scan are independent
+    fetches, so authenticated callers run them concurrently (issue #213);
+    the anonymous tier keeps the exact sequential behavior. The assembled
+    findings dict is identical either way.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    pulls_pages = budget.effective_cap(_REPO_PULLS_PAGES, "repo_pulls_pages")
+    workers = min(3, budget.current().batch_workers)
+    if workers > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            push_future = pool.submit(_repo_push_info, owner, repo, window_days)
+            merges_future = pool.submit(_repo_recent_merges, owner, repo, cutoff, pulls_pages)
+            contributors_future = pool.submit(count_recent_contributors, owner, repo)
+            pushed_at, pushed_recently = push_future.result()
+            recent_merges = merges_future.result()
+            contributors = contributors_future.result()
+    else:
+        pushed_at, pushed_recently = _repo_push_info(owner, repo, window_days)
+        recent_merges = _repo_recent_merges(owner, repo, cutoff, pulls_pages)
+        contributors = count_recent_contributors(owner, repo)
     return {
         "pushed_at": pushed_at[:10],
         "pushed_recently": pushed_recently,
         "recent_merges": recent_merges,
-        "contributors": count_recent_contributors(owner, repo),
+        "contributors": contributors,
         "contributors_window_days": CONTRIBUTORS_WINDOW_DAYS,
     }
 
@@ -1216,10 +1250,28 @@ def run_checks(owner, repo, number, me=None, payload=None):
     findings["stages_skipped"] = ["claimants", "ai_policy", "repo_health"]
     if decide(findings)[0] == TAKEN:
         return findings
-    claimants, comments_truncated = check_claimants(owner, repo, number, me=me)
+    # The tail stages are provably independent: no decide() runs between
+    # them, so they can only append CAUTION reasons, never overturn a
+    # verdict. Authenticated callers run them concurrently (issue #213);
+    # the anonymous tier keeps the exact sequential behavior. Futures are
+    # consumed in submission order, so the first error surfaces exactly
+    # as it did sequentially.
+    workers = min(3, budget.current().batch_workers)
+    if workers > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            claimants_future = pool.submit(check_claimants, owner, repo, number, me=me)
+            policy_future = pool.submit(check_ai_policy, owner, repo)
+            health_future = pool.submit(check_repo_health, owner, repo)
+            claimants, comments_truncated = claimants_future.result()
+            ai_policy = policy_future.result()
+            repo_health = health_future.result()
+    else:
+        claimants, comments_truncated = check_claimants(owner, repo, number, me=me)
+        ai_policy = check_ai_policy(owner, repo)
+        repo_health = check_repo_health(owner, repo)
     findings["claimants"] = claimants
     findings["scan_truncated"]["comments"] = comments_truncated
-    findings["ai_policy"] = check_ai_policy(owner, repo)
-    findings["repo_health"] = check_repo_health(owner, repo)
+    findings["ai_policy"] = ai_policy
+    findings["repo_health"] = repo_health
     findings["stages_skipped"] = []
     return findings

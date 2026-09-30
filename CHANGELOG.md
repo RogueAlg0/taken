@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+- Authenticated `run_checks` tail stages (claimants, AI policy, repo health)
+  now run concurrently, and the repo-health sub-fetches run concurrently
+  too; anonymous callers keep the sequential path. Identical verdicts,
+  lower wall-clock time.
+
 ### Added
 - GraphQL is now the default fetch path for logged-in users (`gh`
   authenticated): one query per issue instead of ~10 REST calls, with
