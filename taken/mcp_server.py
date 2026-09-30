@@ -15,6 +15,7 @@ Never print to stdout here: it carries the JSON-RPC stream. Logs go to
 stderr only.
 """
 
+import concurrent.futures
 import sys
 from typing import Annotated
 
@@ -148,13 +149,28 @@ def scan_repo(
             "effective_parameters": effective_parameters,
             "error": str(exc),
         }
+    # The per-issue checks run through a worker pool sized by the budget
+    # tier, reusing discover's ThreadPoolExecutor pattern. Futures are
+    # consumed in input order, so the stable verdict-rank sort below
+    # yields exactly the sequential output. The fetch mode is resolved
+    # once up front so the identity probe never fires concurrently.
+    mode = graphql.fetch_mode()
+    workers = budget.current().batch_workers
     results = []
-    for item in issues:
-        number = item["number"]
-        try:
-            # The listing already fetched this issue: pass it as payload
-            # so the per-issue refetch is skipped (issue #211).
-            payload = _check_one(owner, repo, number, me=me, payload=item)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [
+            pool.submit(_check_one, owner, repo, item["number"], me=me, mode=mode, payload=item)
+            for item in issues
+        ]
+        for item, future in zip(issues, futures, strict=True):
+            number = item["number"]
+            try:
+                # The listing already fetched this issue: pass it as payload
+                # so the per-issue refetch is skipped (issue #211).
+                payload = future.result()
+            except checks.TakenError as exc:
+                results.append({"target": f"{owner}/{repo}#{number}", "error": str(exc)})
+                continue
             findings = payload["findings"]
             results.append(
                 {
@@ -165,8 +181,6 @@ def scan_repo(
                     "welcoming": checks.welcoming_signals(findings),
                 }
             )
-        except checks.TakenError as exc:
-            results.append({"target": f"{owner}/{repo}#{number}", "error": str(exc)})
     results.sort(key=lambda r: _VERDICT_RANK.get(str(r.get("verdict") or ""), 3))
     summary = {"GO": 0, "CAUTION": 0, "TAKEN": 0, "errors": 0}
     for item in results:
