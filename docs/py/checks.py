@@ -320,6 +320,32 @@ RETRY_BASE_DELAY = 1.0
 # would hang the CLI, so cap it and let the final error surface instead.
 MAX_RETRY_AFTER_DELAY = 120.0
 
+# Minimum gap between search/issues calls. GitHub's secondary rate limits
+# throttle request velocity, not budget, and they stay invisible to
+# `gh api rate_limit`: a cold discover run died 12.5s in on back-to-back
+# searches. Kept a module constant (not a flag) until --debug data argues
+# for tuning it.
+SEARCH_MIN_INTERVAL = 2.0
+
+_search_lock = threading.Lock()
+_last_search_at = 0.0
+
+
+def _pace_search():
+    """Wait until SEARCH_MIN_INTERVAL has passed since the last search call.
+
+    The lock also caps in-flight search requests at one, so parallel
+    discover workers and retry bursts cannot stack searches on top of
+    each other.
+    """
+    global _last_search_at
+    with _search_lock:
+        wait = SEARCH_MIN_INTERVAL - (time.monotonic() - _last_search_at)
+        if wait > 0:
+            time.sleep(wait)
+        _last_search_at = time.monotonic()
+
+
 _TRANSIENT_5XX_RE = re.compile(
     r"\b50[0234]\b|internal server error|bad gateway|service unavailable|gateway timeout",
     re.IGNORECASE,
@@ -668,6 +694,8 @@ def gh_api(endpoint, params=None):
         cmd.extend(["-f", f"{key_param}={value}"])
     attempt = 0
     while True:
+        if endpoint.lstrip("/").startswith("search/"):
+            _pace_search()
         try:
             record_api_call(endpoint)
             rest_start = time.perf_counter()
