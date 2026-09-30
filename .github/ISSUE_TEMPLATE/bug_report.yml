@@ -1,0 +1,26 @@
+name: Bug report
+description: Something is not working as expected
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you ran, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The exact command and the issue or repo it ran against.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: taken version
+      description: Output of `taken --version`.
+    validations:
+      required: true

@@ -1,0 +1,19 @@
+name: Feature request
+description: An idea for making taken better
+title: "[feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: The situation where taken falls short today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What are you proposing?
+      description: The change, in plain words. No need for a full design.
+    validations:
+      required: true
