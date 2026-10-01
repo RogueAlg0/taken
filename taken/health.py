@@ -163,6 +163,49 @@ def _claim_events(events, me=None):
     return claims
 
 
+def _maintainer_replies(events, key, claim_ts):
+    """Maintainer replies to one claim, excluding the claimant themself."""
+    return [
+        ev
+        for ev in events
+        if ev["ts"] > claim_ts and _is_maintainer(ev) and ev["author"].lower() != key
+    ]
+
+
+def _waiting_entry(number, title, url, event, claim_ts, now, wait_days):
+    """A WaitingClaim for an unanswered claim old enough, else None."""
+    age_days = max(0, (now - claim_ts).days)
+    if age_days < wait_days:
+        return None
+    snippet = " ".join(event["body"].split())[:160]
+    return WaitingClaim(
+        number=number,
+        title=title,
+        url=url,
+        claimant=event["author"],
+        claim_date=claim_ts.strftime("%Y-%m-%d"),
+        age_days=age_days,
+        snippet=snippet,
+    )
+
+
+def _quiet_entry(number, title, url, claimant, key, events, reply, now, wait_days):
+    """A QuietClaim when the claimant went silent after a maintainer reply."""
+    answered = any(ev["ts"] > reply["ts"] and ev["author"].lower() == key for ev in events)
+    quiet_days = max(0, (now - reply["ts"]).days)
+    if answered or quiet_days < wait_days:
+        return None
+    return QuietClaim(
+        number=number,
+        title=title,
+        url=url,
+        claimant=claimant,
+        maintainer=reply["author"],
+        reply_date=reply["ts"].strftime("%Y-%m-%d"),
+        quiet_days=quiet_days,
+    )
+
+
 def _scan_issue_claims(item, events, options, me, now):
     """(waiting, quiet) claim entries for one open issue.
 
@@ -180,43 +223,34 @@ def _scan_issue_claims(item, events, options, me, now):
         event = claim["event"]
         if event["association"] in MAINTAINER_ASSOCIATIONS:
             continue
-        claim_ts = claim["ts"]
-        replies = [
-            ev
-            for ev in events
-            if ev["ts"] > claim_ts and _is_maintainer(ev) and ev["author"].lower() != key
-        ]
-        age_days = max(0, (now - claim_ts).days)
+        replies = _maintainer_replies(events, key, claim["ts"])
         if not replies:
-            if age_days >= options.claim_wait_days:
-                snippet = " ".join(event["body"].split())[:160]
-                waiting.append(
-                    WaitingClaim(
-                        number=number,
-                        title=title,
-                        url=url,
-                        claimant=event["author"],
-                        claim_date=claim_ts.strftime("%Y-%m-%d"),
-                        age_days=age_days,
-                        snippet=snippet,
-                    )
-                )
+            entry = _waiting_entry(
+                number,
+                title,
+                url,
+                event,
+                claim["ts"],
+                now,
+                options.claim_wait_days,
+            )
+            if entry is not None:
+                waiting.append(entry)
         else:
             reply = max(replies, key=lambda ev: ev["ts"])
-            answered = any(ev["ts"] > reply["ts"] and ev["author"].lower() == key for ev in events)
-            quiet_days = max(0, (now - reply["ts"]).days)
-            if not answered and quiet_days >= options.claim_wait_days:
-                quiet.append(
-                    QuietClaim(
-                        number=number,
-                        title=title,
-                        url=url,
-                        claimant=event["author"],
-                        maintainer=reply["author"],
-                        reply_date=reply["ts"].strftime("%Y-%m-%d"),
-                        quiet_days=quiet_days,
-                    )
-                )
+            entry = _quiet_entry(
+                number,
+                title,
+                url,
+                event["author"],
+                key,
+                events,
+                reply,
+                now,
+                options.claim_wait_days,
+            )
+            if entry is not None:
+                quiet.append(entry)
     return waiting, quiet
 
 
