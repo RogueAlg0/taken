@@ -30,12 +30,12 @@ function runInstall(env) {
 }
 
 describe("install.js", () => {
-  it("skips pip when `taken --version` already works", () => {
+  it("skips pip when `taken --version` reports the matching version", () => {
     const dir = makeTempDir();
     writeExecutable(
       dir,
       "taken",
-      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "taken 0.7.4"; exit 0; fi\nexit 1\n'
+      `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "taken ${PKG.version}"; exit 0; fi\nexit 1\n`
     );
     // A python3 that must never be called: it would fail loudly if invoked.
     writeExecutable(dir, "python3", '#!/bin/sh\necho "pip should not have run" >&2\nexit 99\n');
@@ -43,6 +43,68 @@ describe("install.js", () => {
     assert.equal(r.status, 0);
     assert.match(r.stdout, /already installed, skipping/);
     assert.doesNotMatch(r.stdout + r.stderr, /pip should not have run/);
+  });
+
+  it("runs pip when the installed taken version mismatches the package", () => {
+    const dir = makeTempDir();
+    writeExecutable(
+      dir,
+      "taken",
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "taken 0.0.1"; exit 0; fi\nexit 1\n'
+    );
+    const marker = path.join(dir, "pip-args.txt");
+    writeExecutable(
+      dir,
+      "python3",
+      `#!/bin/sh\necho "$*" > "${marker}"\nexit 0\n`
+    );
+    const r = runInstall({ PATH: dir });
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /reinstalling with pip/);
+    const args = fs.readFileSync(marker, "utf8").trim();
+    assert.equal(args, `-m pip install --user taken-gh==${PKG.version}`);
+  });
+
+  it("runs pip when `taken --version` output is unparseable", () => {
+    const dir = makeTempDir();
+    writeExecutable(
+      dir,
+      "taken",
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "hello world"; exit 0; fi\nexit 1\n'
+    );
+    const marker = path.join(dir, "pip-args.txt");
+    writeExecutable(
+      dir,
+      "python3",
+      `#!/bin/sh\necho "$*" > "${marker}"\nexit 0\n`
+    );
+    const r = runInstall({ PATH: dir });
+    assert.equal(r.status, 0);
+    const args = fs.readFileSync(marker, "utf8").trim();
+    assert.equal(args, `-m pip install --user taken-gh==${PKG.version}`);
+  });
+
+  it("retries with --break-system-packages on externally-managed-environment", () => {
+    const dir = makeTempDir();
+    const marker = path.join(dir, "pip-args.txt");
+    // no taken on PATH here; python3 fails the first pip attempt with the
+    // PEP 668 error and succeeds once --break-system-packages is passed.
+    writeExecutable(
+      dir,
+      "python3",
+      `#!/bin/sh\necho "$*" >> "${marker}"\ncase "$*" in\n  *break-system-packages*) exit 0 ;;\n  *) echo "error: externally-managed-environment" >&2; exit 1 ;;\nesac\n`
+    );
+    const r = runInstall({ PATH: dir });
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /externally-managed-environment/);
+    assert.match(r.stdout, /--break-system-packages/);
+    const lines = fs.readFileSync(marker, "utf8").trim().split("\n");
+    assert.equal(lines.length, 2);
+    assert.equal(lines[0], `-m pip install --user taken-gh==${PKG.version}`);
+    assert.equal(
+      lines[1],
+      `-m pip install --user --break-system-packages taken-gh==${PKG.version}`
+    );
   });
 
   it("pip-installs the pinned version when taken is missing", () => {

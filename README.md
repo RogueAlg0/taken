@@ -1,6 +1,7 @@
 # taken?
 
 [![PyPI](https://img.shields.io/pypi/v/taken-gh?cacheSeconds=3600)](https://pypi.org/project/taken-gh/)
+[![npm](https://img.shields.io/npm/v/taken-gh?cacheSeconds=3600)](https://www.npmjs.com/package/taken-gh)
 [![CI](https://github.com/RogueAlg0/taken/actions/workflows/ci.yml/badge.svg)](https://github.com/RogueAlg0/taken/actions)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/RogueAlg0/taken/badge)](https://scorecard.dev/viewer/?uri=github.com/RogueAlg0/taken)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14960/badge)](https://www.bestpractices.dev/projects/14960)
