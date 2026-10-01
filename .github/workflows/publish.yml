@@ -181,7 +181,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          # Node 22.14+ is required for npm's OIDC trusted publishing.
+          # Node 24 bundles npm >= 11.5.1, which supports OIDC trusted
+          # publishing, so no separate npm upgrade step is needed.
           node-version: "24"
       - name: Check npm and PyPI versions match the tag
         run: |
@@ -192,7 +193,12 @@ jobs:
             exit 1
           fi
       - name: Ensure npm supports OIDC trusted publishing
-        run: npm install -g npm@12.2.0
+        run: |
+          NPM_VER="$(npm --version)"
+          if [ "$(printf '%s\n%s\n' "11.5.1" "$NPM_VER" | sort -V | head -n 1)" != "11.5.1" ]; then
+            echo "npm $NPM_VER predates OIDC trusted publishing (needs >= 11.5.1); refusing to publish."
+            exit 1
+          fi
       - name: Publish to npm
         working-directory: npm
         # No NODE_AUTH_TOKEN on purpose: auth comes from the trusted
