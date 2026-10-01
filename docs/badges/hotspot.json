@@ -7,8 +7,8 @@
     {
       "file": "taken/checks.py",
       "cc": 265,
-      "commits": 35,
-      "hotspot": 9275
+      "commits": 36,
+      "hotspot": 9540
     },
     {
       "file": "taken/cli.py",
