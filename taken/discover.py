@@ -145,7 +145,9 @@ def _score_ceiling(updated_at):
     return 6 if age_days is None or age_days <= 7 else 4
 
 
-def _verify_candidate(owner, repo, number, item, min_contributors, me, mode="rest"):
+def _verify_candidate(
+    owner, repo, number, item, min_contributors, me, mode="rest", thresholds=None
+):
     """Run the full check on one candidate.
 
     Kept separate so the pool can be verified concurrently; each call only
@@ -153,6 +155,9 @@ def _verify_candidate(owner, repo, number, item, min_contributors, me, mode="res
     the fetch path: "rest" (default), "graphql" (one query per issue via
     `gh api graphql`), or "persistent" (GraphQL over a per-thread
     keep-alive session).
+
+    `thresholds` carries the stale-claim decay settings (issue #83);
+    None means the defaults.
 
     Returns (entry, error): the ranked entry (or None when the candidate
     was filtered by a real verdict), and the TakenError when verification
@@ -165,13 +170,15 @@ def _verify_candidate(owner, repo, number, item, min_contributors, me, mode="res
             # The wrapper falls back to REST per candidate when the GraphQL
             # transport fails, and records the fallback in the findings.
             findings = graphql.run_checks_with_fallback(
-                owner, repo, number, me=me, mode=mode, session=session
+                owner, repo, number, me=me, mode=mode, session=session, thresholds=thresholds
             )
         else:
             # The search item already carries every field check_issue()
             # needs, so the per-issue GET is skipped (issue #153): one
             # fewer API call per candidate, up to VERIFY_POOL per run.
-            findings = checks.run_checks(owner, repo, number, me=me, payload=item)
+            findings = checks.run_checks(
+                owner, repo, number, me=me, payload=item, thresholds=thresholds
+            )
     except checks.TakenError as exc:
         return None, exc  # fail-closed per issue; keep scanning the rest
     verdict, reasons = decide(findings)
@@ -318,6 +325,7 @@ def discover(
     on_progress=None,
     on_searched=None,
     mode="rest",
+    thresholds=None,
 ):
     """Search, verify, and rank contribution candidates.
 
@@ -330,6 +338,9 @@ def discover(
     count.
     mode selects the verification fetch path: "rest" (default), "graphql",
     or "persistent" (see graphql.fetch_mode).
+    thresholds carries the stale-claim decay settings (issue #83); None
+    means the defaults (issue #238: the CLI and MCP wrappers pass the
+    caller's settings through instead of silently dropping them).
 
     Returns a DiscoverResults (a list of dicts sorted by score (desc),
     then recency (desc)) with .errors / .total stats, so callers can tell
@@ -393,7 +404,15 @@ def discover(
             idx = queue.popleft()
             owner, repo, number, item = candidates[idx]
             future = pool.submit(
-                _verify_candidate, owner, repo, number, item, min_contributors, me, mode
+                _verify_candidate,
+                owner,
+                repo,
+                number,
+                item,
+                min_contributors,
+                me,
+                mode,
+                thresholds=thresholds,
             )
             in_flight[future] = idx
             # .verified counts submitted verification work, not consumed

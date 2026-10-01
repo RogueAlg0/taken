@@ -113,6 +113,20 @@ def test_server_registers_three_tools():
         "Your GitHub login; your own comments are ignored. Default: none."
     )
     assert discover_properties["me"]["default"] is None
+    assert discover_properties["pr_idle_days"]["description"] == (
+        "Stale-claim decay: days of linked-PR inactivity before "
+        "TAKEN weakens to CAUTION. Default: 90."
+    )
+    assert discover_properties["pr_idle_days"]["default"] is None
+    assert discover_properties["claim_silence_days"]["description"] == (
+        "Stale-claim decay: days one claim blocks as CAUTION on a "
+        "simple issue; the clock resets on claimant activity. Default: 7."
+    )
+    assert discover_properties["claim_silence_days"]["default"] is None
+    assert discover_properties["claim_silence_complex_days"]["description"] == (
+        "Stale-claim decay: days one claim blocks as CAUTION on a complex issue. Default: 14."
+    )
+    assert discover_properties["claim_silence_complex_days"]["default"] is None
 
 
 def test_check_issue_go(faked):
@@ -236,6 +250,7 @@ def test_discover_candidates_verifies_and_ranks(monkeypatch):
         "labels": ["good first issue"],
         "min_contributors": 0,
         "me": None,
+        "thresholds": checks.default_thresholds(),
     }
     assert [r["target"] for r in payload["results"]] == ["octo/repo#1"]
     assert payload["results"][0]["verdict"] == "GO"
@@ -256,6 +271,7 @@ def test_discover_candidates_echoes_effective_default_parameters(monkeypatch):
         ],
         "min_contributors": 0,
         "me": None,
+        "thresholds": checks.default_thresholds(),
     }
 
 
@@ -278,6 +294,7 @@ def test_discover_candidates_error_echoes_effective_parameters(monkeypatch):
             "labels": ["help wanted"],
             "min_contributors": 50,
             "me": "octocat",
+            "thresholds": checks.default_thresholds(),
         },
         "error": "search unavailable",
     }

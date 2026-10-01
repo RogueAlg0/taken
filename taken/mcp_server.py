@@ -225,6 +225,27 @@ def discover_candidates(
         str | None,
         Field(description="Your GitHub login; your own comments are ignored. Default: none."),
     ] = None,
+    pr_idle_days: Annotated[
+        int | None,
+        Field(
+            description="Stale-claim decay: days of linked-PR inactivity before "
+            "TAKEN weakens to CAUTION. Default: 90."
+        ),
+    ] = None,
+    claim_silence_days: Annotated[
+        int | None,
+        Field(
+            description="Stale-claim decay: days one claim blocks as CAUTION on a "
+            "simple issue; the clock resets on claimant activity. Default: 7."
+        ),
+    ] = None,
+    claim_silence_complex_days: Annotated[
+        int | None,
+        Field(
+            description="Stale-claim decay: days one claim blocks as CAUTION on a "
+            "complex issue. Default: 14."
+        ),
+    ] = None,
 ) -> dict:
     """Discover top open-source contribution candidates.
 
@@ -240,13 +261,31 @@ def discover_candidates(
         min_contributors: only consider repos with at least this many contributors
             in the last 90 days
         me: your GitHub login; your own comments are ignored in the claimant scan
+        pr_idle_days: stale-claim decay threshold for idle linked PRs (default 90)
+        claim_silence_days: stale-claim decay threshold for simple issues (default 7)
+        claim_silence_complex_days: stale-claim decay threshold for complex issues
+            (default 14)
     """
+    thresholds = {
+        "pr_idle_days": pr_idle_days if pr_idle_days is not None else checks.DEFAULT_PR_IDLE_DAYS,
+        "claim_silence_days": (
+            claim_silence_days
+            if claim_silence_days is not None
+            else checks.DEFAULT_CLAIM_SILENCE_DAYS
+        ),
+        "claim_silence_complex_days": (
+            claim_silence_complex_days
+            if claim_silence_complex_days is not None
+            else checks.DEFAULT_CLAIM_SILENCE_COMPLEX_DAYS
+        ),
+    }
     effective_parameters = {
         "limit": limit,
         "language": language,
         "labels": [label] if label else list(discover.SEARCH_LABELS),
         "min_contributors": min_contributors,
         "me": me,
+        "thresholds": thresholds,
     }
     try:
         results = discover.discover(
@@ -259,6 +298,7 @@ def discover_candidates(
             on_progress=None,
             # Automatic from auth state (GraphQL when logged in), like the CLI.
             mode=graphql.fetch_mode(),
+            thresholds=thresholds,
         )
     except checks.TakenError as exc:
         return {"effective_parameters": effective_parameters, "error": str(exc)}

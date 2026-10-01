@@ -77,6 +77,13 @@ Useful flags:
   connection for the whole process; the token comes from `gh auth token`
   and is held in memory only. Opt-in (or `TAKEN_PERSISTENT_SESSION=1`);
   see GRAPHQL_NOTES.md for the security tradeoff
+- `--pr-idle-days N`: stale-claim decay: an open linked PR with no activity
+  for longer than N days weakens from TAKEN to CAUTION (default: 90)
+- `--claim-silence-days N`: stale-claim decay: days one claim blocks as
+  CAUTION on a simple issue; the clock resets on any claimant activity
+  (default: 7)
+- `--claim-silence-complex-days N`: stale-claim decay: days one claim blocks
+  as CAUTION on a complex issue (default: 14)
 - `--version`, `--help`
 
 Exit codes: 0 means GO, 1 means TAKEN, 2 means CAUTION, 3 means something

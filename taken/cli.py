@@ -378,6 +378,7 @@ def run_discover(args):
             on_progress=on_progress if bar is not None else None,
             on_searched=on_searched,
             mode=graphql.fetch_mode(args),
+            thresholds=_thresholds_from_args(args),
         )
     except checks.TakenError as exc:
         if bar is not None:
