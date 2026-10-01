@@ -12,21 +12,21 @@
     },
     {
       "file": "taken/cli.py",
-      "cc": 101,
-      "commits": 30,
-      "hotspot": 3030
+      "cc": 109,
+      "commits": 33,
+      "hotspot": 3597
+    },
+    {
+      "file": "taken/discover.py",
+      "cc": 100,
+      "commits": 23,
+      "hotspot": 2300
     },
     {
       "file": "taken/graphql.py",
       "cc": 170,
       "commits": 11,
       "hotspot": 1870
-    },
-    {
-      "file": "taken/discover.py",
-      "cc": 81,
-      "commits": 21,
-      "hotspot": 1701
     }
   ]
 }
