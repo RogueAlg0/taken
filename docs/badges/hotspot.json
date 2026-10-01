@@ -1,32 +1,38 @@
 {
   "schemaVersion": 1,
   "label": "hotspots",
-  "message": "4 need attention",
+  "message": "5 need attention",
   "color": "orange",
   "files": [
     {
       "file": "taken/checks.py",
-      "cc": 287,
-      "commits": 41,
-      "hotspot": 11767
+      "cc": 300,
+      "commits": 44,
+      "hotspot": 13200
     },
     {
       "file": "taken/cli.py",
-      "cc": 109,
-      "commits": 34,
-      "hotspot": 3706
+      "cc": 135,
+      "commits": 36,
+      "hotspot": 4860
     },
     {
       "file": "taken/discover.py",
-      "cc": 101,
-      "commits": 24,
-      "hotspot": 2424
+      "cc": 117,
+      "commits": 25,
+      "hotspot": 2925
     },
     {
       "file": "taken/graphql.py",
-      "cc": 170,
-      "commits": 12,
-      "hotspot": 2040
+      "cc": 196,
+      "commits": 13,
+      "hotspot": 2548
+    },
+    {
+      "file": "taken/verdict.py",
+      "cc": 50,
+      "commits": 8,
+      "hotspot": 400
     }
   ]
 }
