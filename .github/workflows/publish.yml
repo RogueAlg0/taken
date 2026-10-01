@@ -192,7 +192,7 @@ jobs:
             exit 1
           fi
       - name: Ensure npm supports OIDC trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@12.2.0
       - name: Publish to npm
         working-directory: npm
         # No NODE_AUTH_TOKEN on purpose: auth comes from the trusted
