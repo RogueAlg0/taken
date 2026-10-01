@@ -59,9 +59,11 @@ def test_discover_forwards_thresholds_to_run_checks(monkeypatch):
     seen = []
     real_run_checks = checks.run_checks
 
-    def spy(owner, repo, number, me=None, payload=None, thresholds=None):
+    def spy(owner, repo, number, me=None, payload=None, thresholds=None, **kwargs):
         seen.append(thresholds)
-        return real_run_checks(owner, repo, number, me=me, payload=payload, thresholds=thresholds)
+        return real_run_checks(
+            owner, repo, number, me=me, payload=payload, thresholds=thresholds, **kwargs
+        )
 
     monkeypatch.setattr(checks, "run_checks", spy)
     thresholds = {"pr_idle_days": 30, "claim_silence_days": 5, "claim_silence_complex_days": 9}
@@ -76,9 +78,11 @@ def test_discover_passes_none_thresholds_by_default(monkeypatch):
     seen = []
     real_run_checks = checks.run_checks
 
-    def spy(owner, repo, number, me=None, payload=None, thresholds=None):
+    def spy(owner, repo, number, me=None, payload=None, thresholds=None, **kwargs):
         seen.append(thresholds)
-        return real_run_checks(owner, repo, number, me=me, payload=payload, thresholds=thresholds)
+        return real_run_checks(
+            owner, repo, number, me=me, payload=payload, thresholds=thresholds, **kwargs
+        )
 
     monkeypatch.setattr(checks, "run_checks", spy)
     discover.discover(discover.DiscoverOptions(limit=5))

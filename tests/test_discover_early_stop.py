@@ -45,7 +45,17 @@ def _stub(monkeypatch, plan):
         pool = [("o", "r", n, _item(n, d)) for n, d, _ in plan]
         return (pool, [(",".join(labels), len(pool))], [])
 
-    def fake_verify(owner, repo, number, item, min_contributors, me, mode="rest", thresholds=None):
+    def fake_verify(
+        owner,
+        repo,
+        number,
+        item,
+        min_contributors,
+        me,
+        mode="rest",
+        thresholds=None,
+        repo_memo=None,
+    ):
         calls.append(number)
         outcome = next(o for n, _, o in plan if n == number)
         if outcome == "error":
@@ -166,7 +176,17 @@ def test_no_submission_after_stop_with_blocking_verifier(monkeypatch):
         pool = [("o", "r", n, _item(n, 40)) for n in scores]
         return (pool, [(",".join(labels), len(pool))], [])
 
-    def fake_verify(owner, repo, number, item, min_contributors, me, mode="rest", thresholds=None):
+    def fake_verify(
+        owner,
+        repo,
+        number,
+        item,
+        min_contributors,
+        me,
+        mode="rest",
+        thresholds=None,
+        repo_memo=None,
+    ):
         with calls_lock:
             calls.append(number)
             if len(calls) == 2:

@@ -195,7 +195,15 @@ def _score_ceiling(updated_at):
 
 
 def _verify_candidate(
-    owner, repo, number, item, min_contributors, me, mode="rest", thresholds=None
+    owner,
+    repo,
+    number,
+    item,
+    min_contributors,
+    me,
+    mode="rest",
+    thresholds=None,
+    repo_memo=None,
 ):
     """Run the full check on one candidate.
 
@@ -207,6 +215,10 @@ def _verify_candidate(
 
     `thresholds` carries the stale-claim decay settings (issue #83);
     None means the defaults.
+
+    `repo_memo` is a checks.RepoMemo shared across the run's candidates:
+    repo-level stages are fetched once per repo instead of once per
+    candidate (matters on a cold cache / --no-cache).
 
     Returns (entry, error): the ranked entry (or None when the candidate
     was filtered by a real verdict), and the TakenError when verification
@@ -221,12 +233,23 @@ def _verify_candidate(
             findings = graphql.run_checks_with_fallback(
                 owner, repo, number, me=me, mode=mode, session=session, thresholds=thresholds
             )
+            engaged_comments = None
         else:
             # The search item already carries every field check_issue()
             # needs, so the per-issue GET is skipped (issue #153): one
             # fewer API call per candidate, up to VERIFY_POOL per run.
-            findings = checks.run_checks(
-                owner, repo, number, me=me, payload=item, thresholds=thresholds
+            # include_comments=True reuses the claimant scan's comment
+            # pages for maintainer-engagement scoring instead of
+            # fetching them a second time.
+            findings, engaged_comments, _ = checks.run_checks(
+                owner,
+                repo,
+                number,
+                me=me,
+                payload=item,
+                thresholds=thresholds,
+                include_comments=True,
+                repo_memo=repo_memo,
             )
     except checks.TakenError as exc:
         return None, exc  # fail-closed per issue; keep scanning the rest
@@ -236,10 +259,15 @@ def _verify_candidate(
     if (findings["repo_health"].get("contributors") or 0) < min_contributors:
         return None, None
     try:
-        # The verdict above already reflects the verified evidence; this
-        # second fetch only scores maintainer engagement, so a truncated
+        # The verdict above already reflects the verified evidence; the
+        # engagement check reuses the claimant scan's comment pages when
+        # the REST path fetched them, and falls back to a fresh fetch when
+        # it did not (early TAKEN exit, or the GraphQL path). A truncated
         # page cap here is not a verdict risk.
-        comments, _ = checks.fetch_comments(owner, repo, number)
+        if engaged_comments is not None:
+            comments = engaged_comments
+        else:
+            comments, _ = checks.fetch_comments(owner, repo, number)
     except checks.TakenError as exc:
         return None, exc  # one bad comments fetch must not abort the run
     engaged = maintainer_engaged(findings["issue"], comments, me=me)
@@ -483,6 +511,10 @@ def discover(options=None):
     bandit = None
     repo_queues = None
     queue = deque(range(len(candidates)))
+    # One repo-level memo per run: repo_health and ai_policy are
+    # per-repo data, so candidates from the same repo share a single
+    # fetch even on a cold cache / --no-cache.
+    repo_memo = checks.RepoMemo()
     if options.allocation == "bandit":
         # Group the pool by repo, keeping recency order inside each repo:
         # the bandit chooses the repo, recency still chooses the
@@ -519,6 +551,7 @@ def discover(options=None):
                 options.me,
                 options.mode,
                 thresholds=options.thresholds,
+                repo_memo=repo_memo,
             )
             in_flight[future] = idx
             # .verified counts submitted verification work, not consumed

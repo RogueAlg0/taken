@@ -126,7 +126,17 @@ def fake_search(monkeypatch, items):
 def scripted_verify(monkeypatch, outcomes):
     """outcomes: {(owner, repo, number): ("go"|"nogo"|"error", score)}."""
 
-    def fake(owner, repo, number, item, min_contributors, me, mode="rest", thresholds=None):
+    def fake(
+        owner,
+        repo,
+        number,
+        item,
+        min_contributors,
+        me,
+        mode="rest",
+        thresholds=None,
+        repo_memo=None,
+    ):
         kind, score = outcomes[(owner, repo, number)]
         if kind == "error":
             return None, TakenError("boom")
@@ -199,7 +209,17 @@ def test_bandit_submission_order_is_deterministic(monkeypatch):
     fake_search(monkeypatch, items)
     seen_order = []
 
-    def fake(owner, repo, number, item, min_contributors, me, mode="rest", thresholds=None):
+    def fake(
+        owner,
+        repo,
+        number,
+        item,
+        min_contributors,
+        me,
+        mode="rest",
+        thresholds=None,
+        repo_memo=None,
+    ):
         seen_order.append((owner, repo, number))
         return None, None
 
@@ -223,7 +243,17 @@ def test_recency_allocation_keeps_old_order(monkeypatch):
     fake_search(monkeypatch, items)
     seen_order = []
 
-    def fake(owner, repo, number, item, min_contributors, me, mode="rest", thresholds=None):
+    def fake(
+        owner,
+        repo,
+        number,
+        item,
+        min_contributors,
+        me,
+        mode="rest",
+        thresholds=None,
+        repo_memo=None,
+    ):
         seen_order.append((owner, repo, number))
         return None, None
 

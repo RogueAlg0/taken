@@ -320,9 +320,11 @@ def test_discover_comments_fetch_failure_is_per_candidate_error(monkeypatch):
 
     def flaky_fetch_comments(owner, repo, number):
         calls.append(number)
-        # Fail only the post-verdict comments fetch in _verify_candidate
-        # (the second fetch for issue 1); the one inside run_checks succeeds.
-        if number == 1 and calls.count(1) == 2:
+        # Fail the claimant-scan comments fetch for issue 1. Comment pages
+        # are fetched once and reused for engagement scoring, so this is
+        # the only comments fetch; the failure must surface as a
+        # per-candidate error, not abort the run.
+        if number == 1 and calls.count(1) == 1:
             raise checks.TakenError("comments endpoint 500")
         return real_fetch_comments(owner, repo, number)
 
