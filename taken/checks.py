@@ -788,7 +788,7 @@ def _gh_api_attempt(cmd, endpoint):
         # S6350 (command argument injection) is a false positive here:
         # list-form argv with shell=False, endpoint allowlisted after
         # normalization (see _gh_api_run), so no argument can be read as a
-        # flag. NOSONAR is on both lines because the sink spans them.
+        # flag. The marker is on both lines because the sink spans them.
         proc = subprocess.run(  # NOSONAR
             cmd, capture_output=True, text=True, timeout=API_TIMEOUT
         )  # NOSONAR
