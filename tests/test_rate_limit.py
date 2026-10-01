@@ -179,7 +179,11 @@ def pace_setup(monkeypatch, interval=30.0):
     sleeps = []
     monkeypatch.setattr(checks.time, "sleep", lambda seconds: sleeps.append(seconds))
     monkeypatch.setattr(checks, "SEARCH_MIN_INTERVAL", interval)
-    monkeypatch.setattr(checks, "_last_search_at", 0.0)
+    # Seed the clock as if the previous search ran a full interval ago.
+    # Seeding 0.0 makes the first call sleep on machines booted less than
+    # `interval` seconds ago (time.monotonic() is boot-relative), which
+    # flaked this test on fresh CI runners.
+    monkeypatch.setattr(checks, "_last_search_at", time.monotonic() - interval)
     return sleeps
 
 
