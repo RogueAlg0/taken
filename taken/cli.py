@@ -20,7 +20,7 @@ REPO_RE = re.compile(r"^([^/\s#]+)/([^/\s#]+)$")
 
 
 def parse_target(text):
-    """Parse a target into ("issue", owner, repo, number) or ("repo", owner, repo).
+    """Parse a target into ("issue", owner, repo, number) or ("repo", owner, repo, None).
 
     Accepts owner/repo#123, GitHub issue URLs, or a bare owner/repo
     (scan mode: check the repo's open issues automatically).
@@ -34,7 +34,7 @@ def parse_target(text):
     match = REPO_RE.match(text)
     if match:
         owner, repo = match.groups()
-        return ("repo", owner, repo)
+        return ("repo", owner, repo, None)
     return None
 
 
@@ -353,10 +353,10 @@ def _read_targets_file(args, targets):
     if not args.file:
         return None
     try:
-        # NOSONAR (S8707 false positive: --file is the invoker's own
-        # explicit path; the caller and the file owner are the same party,
-        # so no traversal boundary is crossed)
-        with open(args.file, encoding="utf-8") as fh:
+        # S8707 false positive: --file is the invoker's own explicit path;
+        # the caller and the file owner are the same party, so no traversal
+        # boundary is crossed.
+        with open(args.file, encoding="utf-8") as fh:  # NOSONAR
             for line in fh:
                 line = line.strip()
                 if line and not line.startswith("#"):
@@ -385,7 +385,7 @@ def _run_health_command(parser, args, targets):
             file=sys.stderr,
         )
         return 3
-    _, owner, repo = parsed
+    _, owner, repo, _number = parsed
     return _run_with_stats(run_health, owner, repo, args, verbose=args.verbose, debug=args.debug)
 
 
@@ -739,7 +739,7 @@ def _collect_batch_jobs(targets, args):
             continue
         if parsed[0] == "repo":
             scanned_repo = True
-            _, owner, repo = parsed
+            _, owner, repo, _number = parsed
             if _expand_repo_target(text, owner, repo, args, jobs):
                 failed = True
         else:

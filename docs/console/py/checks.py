@@ -728,9 +728,9 @@ def _cache_write(key, data):
             os.unlink(_cache_path())
         except OSError:
             pass
-        # NOSONAR (S2245 false positive: non-crypto use; this only jitters
-        # how often the cache sweeps expired entries)
-        if random.random() < 0.05:
+        # S2245 false positive: non-crypto use; this only jitters
+        # how often the cache sweeps expired entries.
+        if random.random() < 0.05:  # NOSONAR
             _sweep_expired()
     except OSError:
         pass  # the cache must never break the tool

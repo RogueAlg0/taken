@@ -23,8 +23,9 @@ from typing import Annotated
 try:
     from pydantic import Field
 except ImportError:  # pydantic ships with the `mcp` dependency
-
-    def Field(**kwargs):  # type: ignore[no-redef]  # NOSONAR (S1542 false positive: mirrors pydantic's public Field name)
+    # S1542 false positive: mirrors pydantic's public Field name, so
+    # callers can use Field(...) with or without pydantic installed.
+    def Field(**kwargs):  # type: ignore[no-redef]  # NOSONAR
         return kwargs
 
 
