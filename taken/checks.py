@@ -99,8 +99,8 @@ MAX_SCAN_PAGES = 5
 
 # Repo-health scan depths: merged-PR pages and commit pages per repo.
 # Baselines; the authenticated budget tier may raise them.
-_REPO_PULLS_PAGES = 2
-_REPO_COMMITS_PAGES = 3
+_REPO_PULLS_PAGES = 1
+_REPO_COMMITS_PAGES = 1
 
 # Set to False (via --no-cache) to bypass the response cache.
 _CACHE_ENABLED = True
