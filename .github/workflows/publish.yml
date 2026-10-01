@@ -181,8 +181,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "20"
-          registry-url: "https://registry.npmjs.org"
+          # Node 22.14+ is required for npm's OIDC trusted publishing.
+          node-version: "24"
       - name: Check npm and PyPI versions match the tag
         run: |
           VER="${GITHUB_REF_NAME#v}"
@@ -191,8 +191,12 @@ jobs:
             echo "npm/package.json version ($NPM_VER) does not match tag ($VER); refusing to publish."
             exit 1
           fi
+      - name: Ensure npm supports OIDC trusted publishing
+        run: npm install -g npm@latest
       - name: Publish to npm
         working-directory: npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # No NODE_AUTH_TOKEN on purpose: auth comes from the trusted
+        # publisher configured on npmjs.com, exchanged via this job's
+        # id-token: write permission. Setting any token would make npm
+        # skip OIDC and fail.
         run: npm publish --access public --provenance
