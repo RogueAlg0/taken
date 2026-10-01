@@ -785,7 +785,14 @@ def _gh_api_run(cmd, endpoint, paced):
         try:
             record_api_call(endpoint)
             rest_start = time.perf_counter()
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=API_TIMEOUT)
+            # S6350 (command argument injection) is a false positive here:
+            # list-form argv with shell=False, endpoint allowlisted after
+            # normalization (see the defense-in-depth note above), so no
+            # argument can be read as a flag. NOSONAR is on both lines
+            # because the sink spans them.
+            proc = subprocess.run(  # NOSONAR
+                cmd, capture_output=True, text=True, timeout=API_TIMEOUT
+            )  # NOSONAR
             record_phase("rest", time.perf_counter() - rest_start)
         except FileNotFoundError:
             raise TakenError("the `gh` CLI is not installed or not on PATH") from None
@@ -830,6 +837,10 @@ def _gh_api_run(cmd, endpoint, paced):
 
 def gh_api(endpoint, params=None):
     """GET a GitHub API endpoint via `gh api` and return parsed JSON."""
+    # Normalize before validating: the allowlist must see exactly the string
+    # that reaches subprocess. Stripping first also closes the theoretical
+    # "/-" edge where a leading slash could hide a leading dash.
+    endpoint = endpoint.lstrip("/") if isinstance(endpoint, str) else endpoint
     _require_safe_endpoint(endpoint)
     key = _cache_key(endpoint, params)
     if _CACHE_ENABLED:
@@ -840,14 +851,14 @@ def gh_api(endpoint, params=None):
             record_cache_result(True)
             return cached
         record_cache_result(False)
-    cmd = ["gh", "api", "--method", "GET", endpoint.lstrip("/")]
+    cmd = ["gh", "api", "--method", "GET", endpoint]
     # Pin the method explicitly: stock `gh` switches to POST whenever -f
     # parameters are added, which would turn reads into writes (e.g. POST
     # /repos/{o}/{r}/issues reads as "create an issue"). The GraphQL path
     # builds its own command and intentionally keeps the auto-POST.
     for key_param, value in (params or {}).items():
         cmd.extend(["-f", f"{key_param}={value}"])
-    if endpoint.lstrip("/").startswith("search/"):
+    if endpoint.startswith("search/"):
         # Search pacing: hold the lock through the pace wait AND the entire
         # retry loop, so parallel discover workers and retry bursts can never
         # have two search subprocesses in flight at once. Non-search
