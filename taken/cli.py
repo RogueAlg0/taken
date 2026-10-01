@@ -329,6 +329,9 @@ def main(argv=None):
     targets = list(args.targets)
     if args.file:
         try:
+            # NOSONAR (S8707 false positive: --file is the invoker's own
+            # explicit path; the caller and the file owner are the same party,
+            # so no traversal boundary is crossed)
             with open(args.file, encoding="utf-8") as fh:
                 for line in fh:
                     line = line.strip()
