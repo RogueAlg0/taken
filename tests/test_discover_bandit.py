@@ -84,8 +84,9 @@ def test_bandit_defaults():
 
 
 def test_discover_rejects_unknown_allocation():
+    options = DiscoverOptions(allocation="bogus")
     with pytest.raises(ValueError, match="unknown allocation"):
-        discover.discover(DiscoverOptions(allocation="bogus"))
+        discover.discover(options)
 
 
 # discover() integration: scripted bandit + scripted verifications
