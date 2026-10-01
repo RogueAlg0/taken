@@ -359,6 +359,8 @@ def test_tools_return_machine_readable_error_codes(monkeypatch, error, code, too
         )
     assert payload["error_code"] == code
     assert payload["error"] == str(error)
+
+
 def _stub_tool_output(monkeypatch):
     """Replace decide/labels helpers so canned findings flow through."""
     monkeypatch.setattr(mcp_server, "decide", lambda findings: ("GO", []))
