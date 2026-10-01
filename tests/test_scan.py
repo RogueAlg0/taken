@@ -60,7 +60,7 @@ def test_parse_target_kinds():
         "repo",
         123,
     )
-    assert parse_target("octo/repo") == ("repo", "octo", "repo")
+    assert parse_target("octo/repo") == ("repo", "octo", "repo", None)
     assert parse_target("not a target") is None
 
 

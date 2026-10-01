@@ -71,7 +71,8 @@ def test_batch_api_error_does_not_stop_others(monkeypatch, capsys):
     monkeypatch.setattr(checks, "gh_api", make_fake({1: "boom", 2: "go"}))
     assert main(["octo/repo#1", "octo/repo#2"]) == 3
     out = capsys.readouterr()
-    assert "octo/repo#1" in out.err and "simulated `gh` failure" in out.err
+    assert "octo/repo#1" in out.err
+    assert "simulated `gh` failure" in out.err
     assert "GO      octo/repo#2" in out.out
 
 

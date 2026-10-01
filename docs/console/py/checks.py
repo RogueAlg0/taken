@@ -728,9 +728,9 @@ def _cache_write(key, data):
             os.unlink(_cache_path())
         except OSError:
             pass
-        # NOSONAR (S2245 false positive: non-crypto use; this only jitters
-        # how often the cache sweeps expired entries)
-        if random.random() < 0.05:
+        # S2245 false positive: non-crypto use; this only jitters
+        # how often the cache sweeps expired entries.
+        if random.random() < 0.05:  # NOSONAR
             _sweep_expired()
     except OSError:
         pass  # the cache must never break the tool
@@ -777,6 +777,72 @@ def _rate_limit_message(endpoint, err):
     )
 
 
+def _gh_api_attempt(cmd, endpoint):
+    """Run one `gh api` subprocess attempt; return the completed process.
+
+    Raises TakenError when `gh` is missing or the call times out.
+    """
+    try:
+        record_api_call(endpoint)
+        rest_start = time.perf_counter()
+        # S6350 (command argument injection) is a false positive here:
+        # list-form argv with shell=False, endpoint allowlisted after
+        # normalization (see _gh_api_run), so no argument can be read as a
+        # flag. The marker is on both lines because the sink spans them.
+        proc = subprocess.run(  # NOSONAR
+            cmd, capture_output=True, text=True, timeout=API_TIMEOUT
+        )  # NOSONAR
+        record_phase("rest", time.perf_counter() - rest_start)
+        return proc
+    except FileNotFoundError:
+        raise TakenError("the `gh` CLI is not installed or not on PATH") from None
+    except subprocess.TimeoutExpired:
+        raise TakenError(f"`gh api {endpoint}` timed out after {API_TIMEOUT}s") from None
+
+
+def _gh_api_backoff(err, attempt, honor_retry_after):
+    """Sleep with jittered exponential backoff before the next retry.
+
+    Throttled responses honor Retry-After when present; a brief pause rides
+    out secondary limits, which are about request velocity rather than spent
+    budget. Jitter keeps parallel discover workers from retrying in lockstep.
+    """
+    delay = None
+    if honor_retry_after:
+        delay = _retry_after_seconds(err)
+    if delay is None:
+        delay = RETRY_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+    record_retry(delay)
+    time.sleep(delay)
+
+
+def _gh_api_maybe_retry(endpoint, proc, attempt):
+    """Handle a failed attempt: sleep, then return the next attempt count.
+
+    Raises when the failure is terminal. Rate-limit signals are checked
+    first: a throttled response may cite numeric IDs (e.g. installation
+    40412) that must not be misread as HTTP 404 below.
+    """
+    err = (proc.stderr or "").strip()
+    if _is_rate_limited(err):
+        attempt += 1
+        if attempt >= RETRY_ATTEMPTS:
+            raise RateLimitError(_rate_limit_message(endpoint, err))
+        # Throttled: back off with jitter so parallel discover workers
+        # don't retry in lockstep.
+        _gh_api_backoff(err, attempt, honor_retry_after=True)
+        return attempt
+    if _HTTP_404_RE.search(err) or "Not Found" in err:
+        raise NotFoundError(f"not found: {endpoint}")
+    attempt += 1
+    if not _TRANSIENT_5XX_RE.search(err) or attempt >= RETRY_ATTEMPTS:
+        raise TakenError(f"`gh api {endpoint}` failed: {err[:300]}")
+    # Transient 5xx: back off with jitter so parallel discover workers
+    # don't retry in lockstep.
+    _gh_api_backoff(err, attempt, honor_retry_after=False)
+    return attempt
+
+
 def _gh_api_run(cmd, endpoint, paced):
     """Run one `gh api` call through the retry loop; return parsed JSON.
 
@@ -795,51 +861,10 @@ def _gh_api_run(cmd, endpoint, paced):
     while True:
         if paced:
             _wait_search_pace()
-        try:
-            record_api_call(endpoint)
-            rest_start = time.perf_counter()
-            # S6350 (command argument injection) is a false positive here:
-            # list-form argv with shell=False, endpoint allowlisted after
-            # normalization (see the defense-in-depth note above), so no
-            # argument can be read as a flag. NOSONAR is on both lines
-            # because the sink spans them.
-            proc = subprocess.run(  # NOSONAR
-                cmd, capture_output=True, text=True, timeout=API_TIMEOUT
-            )  # NOSONAR
-            record_phase("rest", time.perf_counter() - rest_start)
-        except FileNotFoundError:
-            raise TakenError("the `gh` CLI is not installed or not on PATH") from None
-        except subprocess.TimeoutExpired:
-            raise TakenError(f"`gh api {endpoint}` timed out after {API_TIMEOUT}s") from None
+        proc = _gh_api_attempt(cmd, endpoint)
         if proc.returncode == 0:
             break
-        err = (proc.stderr or "").strip()
-        # Rate-limit signals first: a throttled response may cite numeric IDs
-        # (e.g. installation 40412) that must not be misread as HTTP 404 below.
-        if _is_rate_limited(err):
-            attempt += 1
-            if attempt >= RETRY_ATTEMPTS:
-                raise RateLimitError(_rate_limit_message(endpoint, err))
-            # Throttled: back off with jitter so parallel discover workers
-            # don't retry in lockstep. Honor Retry-After when the response
-            # carries one; a brief pause rides out secondary limits, which
-            # are about request velocity rather than spent budget.
-            delay = _retry_after_seconds(err)
-            if delay is None:
-                delay = RETRY_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
-            record_retry(delay)
-            time.sleep(delay)
-            continue
-        if _HTTP_404_RE.search(err) or "Not Found" in err:
-            raise NotFoundError(f"not found: {endpoint}")
-        attempt += 1
-        if not _TRANSIENT_5XX_RE.search(err) or attempt >= RETRY_ATTEMPTS:
-            raise TakenError(f"`gh api {endpoint}` failed: {err[:300]}")
-        # Transient 5xx: back off with jitter so parallel discover workers
-        # don't retry in lockstep.
-        delay = RETRY_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
-        record_retry(delay)
-        time.sleep(delay)
+        attempt = _gh_api_maybe_retry(endpoint, proc, attempt)
     record_bytes(len((proc.stdout or "").encode("utf-8")))
     try:
         data = json.loads(proc.stdout)
@@ -985,6 +1010,55 @@ def check_issue(owner, repo, number, payload=None):
     }
 
 
+def _timeline_event_pr(event, seen):
+    """Parse one timeline event into (pr_owner, pr_repo, pr_number), or None.
+
+    Returns None for events that are not linked-PR cross-references, for
+    unparseable PR URLs, and for PRs already seen; new keys are added to
+    `seen` as they are accepted.
+    """
+    if event.get("event") not in ("cross-referenced", "connected"):
+        return None
+    src = (event.get("source") or {}).get("issue") or {}
+    match = PR_URL_RE.match(src.get("html_url") or "")
+    if not match:
+        return None
+    pr_owner, pr_repo, pr_number = match.groups()
+    key = (pr_owner, pr_repo, pr_number)
+    if key in seen:
+        return None
+    seen.add(key)
+    return pr_owner, pr_repo, pr_number
+
+
+def _timeline_pr_info(pr_owner, pr_repo, pr_number):
+    """Fetch a linked PR and build its info dict."""
+    pr = gh_api(f"repos/{pr_owner}/{pr_repo}/pulls/{pr_number}")
+    updated_at = pr.get("updated_at")
+    pr_info = {
+        "number": int(pr_number),
+        "title": pr.get("title"),
+        "state": pr.get("state"),
+        "merged": bool(pr.get("merged_at")),
+        "author": (pr.get("user") or {}).get("login"),
+        "url": pr.get("html_url"),
+        "updated_at": updated_at,
+        "idle_days": days_since(updated_at),
+    }
+    pr_info["age_label"] = pr_age_label(pr_info)
+    return pr_info
+
+
+def _is_taken_decisive(pr_info, pr_idle_days):
+    """True when this linked PR alone decides TAKEN in decide().
+
+    Mirrors decide()'s TAKEN branch exactly, including the fail-closed
+    treatment of unknown idle time.
+    """
+    idle = pr_info["idle_days"]
+    return pr_info["state"] == "open" and not (idle is not None and idle > pr_idle_days)
+
+
 def check_timeline(owner, repo, number, pr_idle_days=None):
     """Find PRs linked to the issue via timeline cross-reference events.
 
@@ -1017,33 +1091,12 @@ def check_timeline(owner, repo, number, pr_idle_days=None):
             endpoint,
         )
         for event in batch:
-            if event.get("event") not in ("cross-referenced", "connected"):
+            parsed = _timeline_event_pr(event, seen)
+            if parsed is None:
                 continue
-            src = (event.get("source") or {}).get("issue") or {}
-            match = PR_URL_RE.match(src.get("html_url") or "")
-            if not match:
-                continue
-            pr_owner, pr_repo, pr_number = match.groups()
-            key = (pr_owner, pr_repo, pr_number)
-            if key in seen:
-                continue
-            seen.add(key)
-            pr = gh_api(f"repos/{pr_owner}/{pr_repo}/pulls/{pr_number}")
-            updated_at = pr.get("updated_at")
-            pr_info = {
-                "number": int(pr_number),
-                "title": pr.get("title"),
-                "state": pr.get("state"),
-                "merged": bool(pr.get("merged_at")),
-                "author": (pr.get("user") or {}).get("login"),
-                "url": pr.get("html_url"),
-                "updated_at": updated_at,
-                "idle_days": days_since(updated_at),
-            }
-            pr_info["age_label"] = pr_age_label(pr_info)
+            pr_info = _timeline_pr_info(*parsed)
             linked.append(pr_info)
-            idle = pr_info["idle_days"]
-            if pr_info["state"] == "open" and not (idle is not None and idle > pr_idle_days):
+            if _is_taken_decisive(pr_info, pr_idle_days):
                 # TAKEN-decisive: decide() reports TAKEN on this PR alone.
                 # Note: truncated=True here is over-conservative when the
                 # decisive PR is the last item of a short final page (the
@@ -1056,6 +1109,56 @@ def check_timeline(owner, repo, number, pr_idle_days=None):
             # Full page at the cap: the API may hold more items we did not fetch.
             truncated = True
     return linked, truncated
+
+
+def _latest_activity_by_author(comments):
+    """Map each comment author (lowercased login) to (timestamp, display name).
+
+    Scans ALL comments: the silence clock resets on any claimant activity,
+    not just claimant-language comments.
+    """
+    latest_activity = {}
+    for comment in comments:
+        author = (comment.get("user") or {}).get("login", "") or ""
+        if not author:
+            continue
+        ts = _parse_ts(comment.get("created_at"))
+        if ts is None:
+            continue
+        key = author.lower()
+        if key not in latest_activity or ts > latest_activity[key][0]:
+            latest_activity[key] = (ts, author)
+    return latest_activity
+
+
+def _claimant_hit(comment, me_lower, now, latest_activity):
+    """Build the hit dict for one comment, or None when it is not a hit."""
+    author = (comment.get("user") or {}).get("login", "")
+    if me_lower and author.lower() == me_lower:
+        return None
+    body = comment.get("body") or ""
+    lowered = body.lower()
+    matched = next((p for p in CLAIMANT_PATTERNS if p in lowered), None)
+    if matched is None:
+        return None
+    snippet = " ".join(body.split())
+    created_at = comment.get("created_at") or ""
+    age_days = days_since(created_at, now)
+    latest = latest_activity.get(author.lower())
+    if latest is None:
+        since_activity = None
+    else:
+        since_activity = max(0, (now - latest[0]).days)
+    return {
+        "author": author,
+        "date": created_at[:10],
+        "pattern": matched,
+        "snippet": snippet[:160],
+        "url": comment.get("html_url"),
+        "age_days": age_days,
+        "days_since_claimant_activity": since_activity,
+        "age_label": f"expressed interest {age_phrase(age_days)}",
+    }
 
 
 def find_claimant_hits(comments, me=None, now=None):
@@ -1071,45 +1174,13 @@ def find_claimant_hits(comments, me=None, now=None):
     now = now or datetime.now(timezone.utc)
     # Latest activity per author across ALL comments: the silence clock
     # resets on any claimant activity, not just claimant-language comments.
-    latest_activity = {}
-    for comment in comments:
-        author = (comment.get("user") or {}).get("login", "") or ""
-        if not author:
-            continue
-        ts = _parse_ts(comment.get("created_at"))
-        if ts is None:
-            continue
-        key = author.lower()
-        if key not in latest_activity or ts > latest_activity[key][0]:
-            latest_activity[key] = (ts, author)
+    latest_activity = _latest_activity_by_author(comments)
     hits = []
     me_lower = (me or "").lower()
     for comment in comments:
-        author = (comment.get("user") or {}).get("login", "")
-        if me_lower and author.lower() == me_lower:
-            continue
-        body = comment.get("body") or ""
-        lowered = body.lower()
-        matched = next((p for p in CLAIMANT_PATTERNS if p in lowered), None)
-        if matched is None:
-            continue
-        snippet = " ".join(body.split())
-        created_at = comment.get("created_at") or ""
-        age_days = days_since(created_at, now)
-        latest = latest_activity.get(author.lower())
-        since_activity = max(0, (now - latest[0]).days) if latest else None
-        hits.append(
-            {
-                "author": author,
-                "date": created_at[:10],
-                "pattern": matched,
-                "snippet": snippet[:160],
-                "url": comment.get("html_url"),
-                "age_days": age_days,
-                "days_since_claimant_activity": since_activity,
-                "age_label": f"expressed interest {age_phrase(age_days)}",
-            }
-        )
+        hit = _claimant_hit(comment, me_lower, now, latest_activity)
+        if hit is not None:
+            hits.append(hit)
     return hits
 
 
@@ -1257,6 +1328,23 @@ def list_open_issues(owner, repo, limit=20, label=None):
     return found
 
 
+def _commit_author_key(commit):
+    """Normalized author key for one commit dict, or None when unusable.
+
+    Bots are excluded. Prefers the GitHub login; falls back to the commit
+    email when the commit has no linked GitHub user.
+    """
+    login = (commit.get("author") or {}).get("login") or ""
+    if login:
+        if login.endswith("[bot]"):
+            return None
+        return login.lower()
+    email = ((commit.get("commit") or {}).get("author") or {}).get("email") or ""
+    if email:
+        return email.lower()
+    return None
+
+
 def count_recent_contributors(owner, repo, days=CONTRIBUTORS_WINDOW_DAYS):
     """Count distinct people who landed commits in the last `days` days.
 
@@ -1277,16 +1365,9 @@ def count_recent_contributors(owner, repo, days=CONTRIBUTORS_WINDOW_DAYS):
         if not commits:
             break
         for commit in commits:
-            author = commit.get("author") or {}
-            login = author.get("login") or ""
-            if login:
-                if login.endswith("[bot]"):
-                    continue
-                authors.add(login.lower())
-            else:
-                email = ((commit.get("commit") or {}).get("author") or {}).get("email") or ""
-                if email:
-                    authors.add(email.lower())
+            key = _commit_author_key(commit)
+            if key is not None:
+                authors.add(key)
         if len(commits) < 100:
             break
     return len(authors)

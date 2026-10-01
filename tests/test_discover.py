@@ -493,8 +493,9 @@ def test_discover_raises_when_every_label_search_fails(monkeypatch):
         raise AssertionError(f"unexpected endpoint: {endpoint}")
 
     monkeypatch.setattr(checks, "gh_api", fake)
+    options = discover.DiscoverOptions(jobs=1)
     with pytest.raises(checks.TakenError, match="boom"):
-        discover.discover(discover.DiscoverOptions(jobs=1))
+        discover.discover(options)
 
 
 def test_discover_combined_search_success_reports_no_search_errors(monkeypatch):

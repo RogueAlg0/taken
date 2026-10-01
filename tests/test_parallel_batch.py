@@ -73,7 +73,8 @@ def test_batch_checks_run_concurrently(monkeypatch, capsys):
     monkeypatch.setattr(cli, "check_one", fake_check_one)
     assert cli.run_batch(["o/r#1", "o/r#2"], _args()) == 0
     out = capsys.readouterr().out
-    assert "o/r#1" in out and "o/r#2" in out
+    assert "o/r#1" in out
+    assert "o/r#2" in out
 
 
 def test_batch_output_order_preserved(monkeypatch, capsys):
@@ -161,7 +162,8 @@ def test_batch_repo_scan_checks_issues_concurrently(monkeypatch, capsys):
     monkeypatch.setattr(cli, "check_one", fake_check_one)
     assert cli.run_batch(["o/r"], _args()) == 0
     out = capsys.readouterr().out
-    assert "o/r#1" in out and "o/r#2" in out
+    assert "o/r#1" in out
+    assert "o/r#2" in out
 
 
 def test_batch_check_error_does_not_stop_others(monkeypatch, capsys):

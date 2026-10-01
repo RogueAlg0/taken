@@ -13,8 +13,9 @@ THRESHOLD_FLAGS = (
 
 @pytest.mark.parametrize("flag", THRESHOLD_FLAGS)
 def test_stale_claim_thresholds_reject_negative_values(flag, capsys):
+    parser = build_parser()
     with pytest.raises(SystemExit) as exc_info:
-        build_parser().parse_args([flag, "-1"])
+        parser.parse_args([flag, "-1"])
 
     assert exc_info.value.code == 2
     assert f"argument {flag}: must be non-negative" in capsys.readouterr().err
