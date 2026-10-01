@@ -81,6 +81,7 @@ def _verify_pool_size():
 # engagement and must not earn the +3 "maintainer replied" points.
 MAINTAINER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
+
 def _thread_graphql_session():
     """One persistent GraphQL session per verify-pool thread.
 

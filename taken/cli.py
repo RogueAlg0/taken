@@ -620,7 +620,13 @@ def check_one(owner, repo, number, me, mode="rest", payload=None, thresholds=Non
         # thread its own session instead of the shared singleton.
         session = graphql.thread_session()
     findings = graphql.run_checks_with_fallback(
-        owner, repo, number, me=me, mode=mode, payload=payload, thresholds=thresholds,
+        owner,
+        repo,
+        number,
+        me=me,
+        mode=mode,
+        payload=payload,
+        thresholds=thresholds,
         session=session,
     )
     verdict, reasons = decide(findings)
