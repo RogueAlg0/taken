@@ -94,7 +94,7 @@ def test_five_full_timeline_pages_flag_truncation(monkeypatch):
 
 def test_five_full_comment_pages_flag_truncation(monkeypatch):
     pages_seen = _quiet_run_checks_fake(monkeypatch, comment_pages=5)
-    hits, truncated = checks.check_claimants("o", "r", 1)
+    hits, _, truncated = checks.check_claimants("o", "r", 1)
     assert hits == []
     assert truncated is True
     assert pages_seen["comments"] == 5
@@ -103,7 +103,7 @@ def test_five_full_comment_pages_flag_truncation(monkeypatch):
 def test_short_page_is_not_truncation(monkeypatch):
     _quiet_run_checks_fake(monkeypatch, timeline_pages=2, comment_pages=1)
     _, timeline_truncated = checks.check_timeline("o", "r", 1)
-    _, comments_truncated = checks.check_claimants("o", "r", 1)
+    _, _, comments_truncated = checks.check_claimants("o", "r", 1)
     assert timeline_truncated is False
     assert comments_truncated is False
 

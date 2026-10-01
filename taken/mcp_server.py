@@ -24,7 +24,7 @@ try:
     from pydantic import Field
 except ImportError:  # pydantic ships with the `mcp` dependency
 
-    def Field(**kwargs):  # type: ignore[no-redef]
+    def Field(**kwargs):  # type: ignore[no-redef]  # NOSONAR (S1542 false positive: mirrors pydantic's public Field name)
         return kwargs
 
 
@@ -132,7 +132,12 @@ def check_issue(
     """
     # Explicit flags win; otherwise the transport is automatic from auth
     # state (GraphQL when logged in, REST when anonymous), like the CLI.
-    mode = "persistent" if persistent_session else ("graphql" if graphql else None)
+    if persistent_session:
+        mode = "persistent"
+    elif graphql:
+        mode = "graphql"
+    else:
+        mode = None
     try:
         return _check_one(owner, repo, issue_number, me=me, mode=mode)
     except (checks.TakenError, subprocess.TimeoutExpired) as exc:

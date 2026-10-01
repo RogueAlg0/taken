@@ -47,12 +47,15 @@ def default_thresholds():
     }
 
 
+_UTC_SUFFIX = "+00:00"
+
+
 def _parse_ts(ts):
     """Parse an ISO-8601 timestamp to an aware datetime; None when unknown."""
     if not ts:
         return None
     try:
-        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(str(ts).replace("Z", _UTC_SUFFIX))
     except ValueError:
         return None
     if dt.tzinfo is None:
@@ -72,7 +75,12 @@ def days_since(ts, now=None):
 def pr_age_label(pr):
     """One-line age label for a linked-PR finding dict."""
     state = pr.get("state")
-    word = "open" if state == "open" else "merged" if pr.get("merged") else state or "PR"
+    if state == "open":
+        word = "open"
+    elif pr.get("merged"):
+        word = "merged"
+    else:
+        word = state or "PR"
     return f"{word} PR #{pr.get('number')}, last activity {age_phrase(pr.get('idle_days'))}"
 
 
@@ -488,6 +496,9 @@ def _require_list(value, endpoint):
     return value
 
 
+_CACHE_FILE_SUFFIX = ".json"
+
+
 def _cache_dir():
     """Location of the API response cache. Overridable via TAKEN_CACHE_DIR."""
     raw = os.environ.get("TAKEN_CACHE_DIR")
@@ -512,7 +523,7 @@ def _cache_file(key):
     and same-key races resolve to last-writer-wins with a valid file.
     """
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
-    return os.path.join(_cache_dir(), "v2", digest + ".json")
+    return os.path.join(_cache_dir(), "v2", digest + _CACHE_FILE_SUFFIX)
 
 
 def _cache_key(endpoint, params):
@@ -584,7 +595,7 @@ def _sweep_expired():
     try:
         now = time.time()
         for name in os.listdir(os.path.join(_cache_dir(), "v2")):
-            if not name.endswith(".json"):
+            if not name.endswith(_CACHE_FILE_SUFFIX):
                 continue
             path = os.path.join(_cache_dir(), "v2", name)
             try:
@@ -607,7 +618,7 @@ def _looks_like_taken_cache(cache_dir):
         for name in files:
             if name == "api_cache.json":
                 continue
-            if name.endswith(".json") and os.path.basename(root) == "v2":
+            if name.endswith(_CACHE_FILE_SUFFIX) and os.path.basename(root) == "v2":
                 continue
             return False
     return True
@@ -665,7 +676,7 @@ def clear_cache():
         return -1
     removed = 0
     for _root, _dirs, files in os.walk(cache_dir):
-        removed += sum(1 for name in files if name.endswith(".json"))
+        removed += sum(1 for name in files if name.endswith(_CACHE_FILE_SUFFIX))
     try:
         shutil.rmtree(cache_dir)
     except OSError:
@@ -717,6 +728,8 @@ def _cache_write(key, data):
             os.unlink(_cache_path())
         except OSError:
             pass
+        # NOSONAR (S2245 false positive: non-crypto use; this only jitters
+        # how often the cache sweeps expired entries)
         if random.random() < 0.05:
             _sweep_expired()
     except OSError:
@@ -1100,20 +1113,16 @@ def fetch_comments(owner, repo, number):
     return _paged_list(endpoint)
 
 
-def check_claimants(owner, repo, number, me=None, return_comments=False):
+def check_claimants(owner, repo, number, me=None):
     """Fetch issue comments and scan them for claimant language.
 
-    Returns (hits, truncated): truncated is True when the comment scan hit
-    the page cap, so a claimant comment beyond the cap may have been missed.
-    With return_comments=True, returns (hits, comments, truncated) so a
-    caller that needs the raw comments (e.g. maintainer-engagement
-    scoring) can reuse the fetched pages instead of fetching them again.
+    Returns (hits, comments, truncated): truncated is True when the comment
+    scan hit the page cap, so a claimant comment beyond the cap may have
+    been missed. Callers that only need hits ignore the middle element.
     """
     comments, truncated = fetch_comments(owner, repo, number)
     hits = find_claimant_hits(comments, me=me)
-    if return_comments:
-        return hits, comments, truncated
-    return hits, truncated
+    return hits, comments, truncated
 
 
 class RepoMemo:
@@ -1279,7 +1288,7 @@ def _repo_push_info(owner, repo, window_days=HEALTH_WINDOW_DAYS):
     pushed_at = data.get("pushed_at") or ""
     pushed_recently = False
     if pushed_at:
-        pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
+        pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", _UTC_SUFFIX))
         pushed_recently = datetime.now(timezone.utc) - pushed_dt <= timedelta(days=window_days)
     return pushed_at, pushed_recently
 
@@ -1312,7 +1321,7 @@ def _repo_recent_merges(owner, repo, cutoff, pulls_pages):
             merged_at = pr.get("merged_at")
             if not merged_at:
                 continue
-            merged_dt = datetime.fromisoformat(merged_at.replace("Z", "+00:00"))
+            merged_dt = datetime.fromisoformat(merged_at.replace("Z", _UTC_SUFFIX))
             if merged_dt >= cutoff:
                 recent_merges += 1
         if len(prs) < 50:
@@ -1477,18 +1486,14 @@ def run_checks(
     workers = min(3, budget.current().batch_workers)
     if workers > 1:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            claimants_future = pool.submit(
-                check_claimants, owner, repo, number, me=me, return_comments=True
-            )
+            claimants_future = pool.submit(check_claimants, owner, repo, number, me=me)
             policy_future = pool.submit(_get_policy)
             health_future = pool.submit(_get_health)
             claimants, claim_comments, comments_truncated = claimants_future.result()
             ai_policy = policy_future.result()
             repo_health = health_future.result()
     else:
-        claimants, claim_comments, comments_truncated = check_claimants(
-            owner, repo, number, me=me, return_comments=True
-        )
+        claimants, claim_comments, comments_truncated = check_claimants(owner, repo, number, me=me)
         ai_policy = _get_policy()
         repo_health = _get_health()
     findings["claimants"] = claimants

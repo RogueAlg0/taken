@@ -38,6 +38,9 @@ from taken import budget, checks
 # authenticated budget tier may raise them (see taken/budget.py).
 _MAX_COMMENT_PAGES = 5
 _MAX_TIMELINE_PAGES = 5
+_ISSUE_QUERY_LABEL = "issue query"
+_GITHUB_API_HOST = "api.github.com"
+_UTC_SUFFIX = "+00:00"
 _MAX_HISTORY_PAGES = 3
 _MAX_MERGE_PAGES = 2
 # Labels are tiny: 3 pages x 100 covers 300 labels, far beyond any
@@ -201,7 +204,7 @@ def _cached_or_fetch(query, variables, fetcher):
         checks.record_cache_result(False)
     checks.record_api_call("graphql")
     payload = fetcher()
-    _raise_for_errors(payload, "issue query")
+    _raise_for_errors(payload, _ISSUE_QUERY_LABEL)
     data = payload.get("data")
     if not isinstance(data, dict):
         raise checks.TakenError("GitHub GraphQL query returned an unexpected response")
@@ -239,7 +242,7 @@ def graphql_via_gh(query, variables):
         except json.JSONDecodeError:
             payload = {}
         if isinstance(payload, dict) and payload.get("errors"):
-            _raise_for_errors(payload, "issue query")
+            _raise_for_errors(payload, _ISSUE_QUERY_LABEL)
         if proc.returncode != 0:
             err = (proc.stderr or "").strip()
             if checks._is_rate_limited(err):
@@ -310,14 +313,14 @@ class PersistentGraphQLSession:
         the proxy, so keep-alive and per-request auth keep working.
         """
         proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
-        if proxy_url and not urllib.request.proxy_bypass("api.github.com"):
+        if proxy_url and not urllib.request.proxy_bypass(_GITHUB_API_HOST):
             parsed = urllib.parse.urlparse(proxy_url)
             conn = http.client.HTTPSConnection(
                 parsed.hostname, parsed.port or 443, timeout=GRAPHQL_TIMEOUT
             )
-            conn.set_tunnel("api.github.com", 443)
+            conn.set_tunnel(_GITHUB_API_HOST, 443)
             return conn
-        return http.client.HTTPSConnection("api.github.com", timeout=GRAPHQL_TIMEOUT)
+        return http.client.HTTPSConnection(_GITHUB_API_HOST, timeout=GRAPHQL_TIMEOUT)
 
     def post(self, query, variables):
         """POST one GraphQL query, reconnecting once if the tunnel died.
@@ -397,7 +400,7 @@ class PersistentGraphQLSession:
 
     def _checked_post(self, query, variables):
         payload = self.post(query, variables)
-        _raise_for_errors(payload, "issue query")
+        _raise_for_errors(payload, _ISSUE_QUERY_LABEL)
         if not isinstance(payload.get("data"), dict):
             raise checks.TakenError("persistent GraphQL query returned an unexpected response")
         return payload
@@ -520,7 +523,7 @@ def _map_repo_health(repository, window_days=checks.HEALTH_WINDOW_DAYS):
     pushed_at = repository.get("pushedAt") or ""
     pushed_recently = False
     if pushed_at:
-        pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
+        pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", _UTC_SUFFIX))
         pushed_recently = datetime.now(timezone.utc) - pushed_dt <= timedelta(days=window_days)
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
     recent_merges = 0
@@ -528,7 +531,7 @@ def _map_repo_health(repository, window_days=checks.HEALTH_WINDOW_DAYS):
         merged_at = pr.get("mergedAt")
         if not merged_at:
             continue
-        merged_dt = datetime.fromisoformat(merged_at.replace("Z", "+00:00"))
+        merged_dt = datetime.fromisoformat(merged_at.replace("Z", _UTC_SUFFIX))
         if merged_dt >= cutoff:
             recent_merges += 1
     authors = set()
@@ -763,6 +766,6 @@ def _oldest_merged_at(merged):
         return datetime.min.replace(tzinfo=timezone.utc)
     last = nodes[-1].get("mergedAt") or ""
     try:
-        return datetime.fromisoformat(last.replace("Z", "+00:00"))
+        return datetime.fromisoformat(last.replace("Z", _UTC_SUFFIX))
     except ValueError:
         return datetime.min.replace(tzinfo=timezone.utc)

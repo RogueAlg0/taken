@@ -88,12 +88,10 @@ def test_memory_cache_avoids_disk_reads(cache_env, counting_run, tmp_path):
     assert len(counting_run) == 1
 
 
-def test_unwritable_cache_dir_does_not_break(cache_env, counting_run, tmp_path):
+def test_unwritable_cache_dir_does_not_break(cache_env, counting_run, tmp_path, monkeypatch):
     blocker = tmp_path / "blocker"
     blocker.write_text("a file, not a dir")
-    import os
-
-    os.environ["TAKEN_CACHE_DIR"] = str(blocker)
+    monkeypatch.setenv("TAKEN_CACHE_DIR", str(blocker))
     assert checks.gh_api("repos/octo/repo") == {"ok": True, "n_calls": 1}
     assert len(counting_run) == 1
 

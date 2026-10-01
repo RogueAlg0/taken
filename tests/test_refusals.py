@@ -82,7 +82,7 @@ def test_me_filter_turns_claimant_thread_into_go(monkeypatch):
     ]
     monkeypatch.setattr(checks, "gh_api", lambda endpoint, params=None: comments)
 
-    hits, truncated = checks.check_claimants("octo", "repo", 1, me="RogueAlg0")
+    hits, _, truncated = checks.check_claimants("octo", "repo", 1, me="RogueAlg0")
     assert hits == []
     assert truncated is False
 
@@ -96,7 +96,7 @@ def test_same_thread_without_me_filter_is_not_go(monkeypatch):
     comments = [make_comment("RogueAlg0", "I'd like to take this one on, please.")]
     monkeypatch.setattr(checks, "gh_api", lambda endpoint, params=None: comments)
 
-    hits, truncated = checks.check_claimants("octo", "repo", 1)
+    hits, _, truncated = checks.check_claimants("octo", "repo", 1)
     assert len(hits) == 1
     assert truncated is False
 

@@ -77,7 +77,7 @@ def test_comment_scan_finds_claimant_on_page_two(monkeypatch):
         raise AssertionError("unexpected endpoint " + endpoint)
 
     monkeypatch.setattr(checks, "gh_api", fake)
-    hits, truncated = checks.check_claimants("octo", "repo", 1)
+    hits, _, truncated = checks.check_claimants("octo", "repo", 1)
     assert [hit["author"] for hit in hits] == ["volunteer"]
     assert truncated is False
 
