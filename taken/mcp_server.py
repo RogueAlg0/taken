@@ -33,7 +33,7 @@ from taken import __version__, budget, checks, discover, graphql
 from taken.verdict import decide
 
 
-def _check_one(owner, repo, number, me=None, mode=None, payload=None):
+def _check_one(owner, repo, number, me=None, mode=None, payload=None, session=None):
     """Run the full check suite on one issue; return the tool payload.
 
     ``mode`` selects the fetch path ("rest", "graphql", "persistent");
@@ -45,11 +45,20 @@ def _check_one(owner, repo, number, me=None, mode=None, payload=None):
 
     `payload` is an optional pre-fetched issue item: on the REST path it
     skips the per-issue refetch (issue #211).
+
+    `session` is an optional persistent GraphQL session. In persistent
+    mode with no session given, each calling thread gets its own session
+    via graphql.thread_session(); the process-wide singleton is never
+    shared across pool worker threads (issue #317).
     """
     if mode is None:
         mode = graphql.fetch_mode()
+    if mode == "persistent" and session is None:
+        # Runs on the worker thread, so thread-local storage hands this
+        # thread its own session instead of the shared singleton.
+        session = graphql.thread_session()
     findings = graphql.run_checks_with_fallback(
-        owner, repo, number, me=me, mode=mode, payload=payload
+        owner, repo, number, me=me, mode=mode, payload=payload, session=session
     )
     verdict, reasons = decide(findings)
     return {

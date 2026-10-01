@@ -23,6 +23,7 @@ import os
 import random
 import re
 import subprocess
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -431,6 +432,24 @@ def get_session():
     if _SESSION is None:
         _SESSION = PersistentGraphQLSession()
     return _SESSION
+
+
+_thread_state = threading.local()
+
+
+def thread_session():
+    """One persistent GraphQL session per calling thread.
+
+    ``get_session()`` shares a single keep-alive connection, which is not
+    safe to use from pool worker threads; each thread keeps its own
+    session (and its own connection) instead. The token is still read once
+    per thread from ``gh auth token`` and held in memory only.
+    """
+    session = getattr(_thread_state, "graphql_session", None)
+    if session is None:
+        session = PersistentGraphQLSession()
+        _thread_state.graphql_session = session
+    return session
 
 
 # ---------------------------------------------------------------------------

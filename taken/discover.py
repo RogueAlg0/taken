@@ -9,7 +9,6 @@ anywhere. No aggregator filters on that.
 
 import concurrent.futures
 import random
-import threading
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -82,9 +81,6 @@ def _verify_pool_size():
 # engagement and must not earn the +3 "maintainer replied" points.
 MAINTAINER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
-_thread_state = threading.local()
-
-
 def _thread_graphql_session():
     """One persistent GraphQL session per verify-pool thread.
 
@@ -93,11 +89,7 @@ def _thread_graphql_session():
     own session (and its own connection) instead. The token is still read
     once per thread from `gh auth token` and held in memory only.
     """
-    session = getattr(_thread_state, "graphql_session", None)
-    if session is None:
-        session = graphql.PersistentGraphQLSession()
-        _thread_state.graphql_session = session
-    return session
+    return graphql.thread_session()
 
 
 def build_query(labels, language=None, updated_after=None):

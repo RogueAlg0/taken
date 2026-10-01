@@ -596,7 +596,7 @@ def _thresholds_from_args(args):
     }
 
 
-def check_one(owner, repo, number, me, mode="rest", payload=None, thresholds=None):
+def check_one(owner, repo, number, me, mode="rest", payload=None, thresholds=None, session=None):
     """Run the full check on one issue. Returns (target, verdict, reasons, findings).
 
     GraphQL-family modes fall back to REST per issue when the GraphQL
@@ -609,9 +609,19 @@ def check_one(owner, repo, number, me, mode="rest", payload=None, thresholds=Non
 
     `thresholds` carries the stale-claim decay settings (issue #83);
     None means the defaults.
+
+    `session` is an optional persistent GraphQL session. In persistent
+    mode with no session given, each calling thread gets its own session
+    via graphql.thread_session(); the process-wide singleton is never
+    shared across pool worker threads (issue #317).
     """
+    if mode == "persistent" and session is None:
+        # Runs on the worker thread, so thread-local storage hands this
+        # thread its own session instead of the shared singleton.
+        session = graphql.thread_session()
     findings = graphql.run_checks_with_fallback(
-        owner, repo, number, me=me, mode=mode, payload=payload, thresholds=thresholds
+        owner, repo, number, me=me, mode=mode, payload=payload, thresholds=thresholds,
+        session=session,
     )
     verdict, reasons = decide(findings)
     return f"{owner}/{repo}#{number}", verdict, reasons, findings
