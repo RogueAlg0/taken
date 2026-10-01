@@ -36,7 +36,9 @@ def test_timeline_finds_pr_on_page_two(monkeypatch):
     linked, truncated = checks.check_timeline("octo", "repo", 1)
     assert seen_pages == [1, 2]
     assert [pr["number"] for pr in linked] == [7]
-    assert truncated is False
+    # New contract (#166, #217): the scan stops at the first TAKEN-decisive
+    # PR, so truncated is True even though page 2 was fetched.
+    assert truncated is True
 
 
 def test_timeline_stops_on_a_short_page(monkeypatch):

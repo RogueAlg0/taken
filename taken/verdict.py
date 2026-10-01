@@ -76,11 +76,11 @@ def age_phrase(days):
 
 
 def _truncation_reasons(findings):
-    """CAUTION reasons for timeline/comment/label scans that stopped at the page cap."""
+    """CAUTION reasons for timeline/comment/label scans that stopped early."""
     reasons = []
     scan_truncated = findings.get("scan_truncated") or {}
     if scan_truncated.get("timeline"):
-        reasons.append("timeline scan hit the page cap; a linked PR beyond the cap would be missed")
+        reasons.append("timeline scan stopped early; a linked PR beyond the scan would be missed")
     if scan_truncated.get("comments"):
         reasons.append("comment scan hit the page cap; a claimant beyond the cap would be missed")
     if scan_truncated.get("labels"):
@@ -191,7 +191,7 @@ def decide(findings):
     elif policy == "disclosure-required":
         caution_reasons.append("repo requires AI disclosure on contributions")
 
-    # A scan that stopped early at the page cap did not see everything.
+    # A scan that stopped early did not see everything.
     # Downgrade to CAUTION rather than risk a GO on incomplete evidence.
     caution_reasons.extend(_truncation_reasons(findings))
 

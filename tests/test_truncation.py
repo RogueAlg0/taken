@@ -114,7 +114,7 @@ def test_truncated_timeline_downgrades_go_to_caution(monkeypatch):
     assert findings["scan_truncated"] == {"timeline": True, "comments": False, "labels": False}
     verdict, reasons = decide(findings)
     assert verdict == CAUTION
-    assert any("timeline scan hit the page cap" in r for r in reasons)
+    assert any("timeline scan stopped early" in r for r in reasons)
 
 
 def test_truncated_comments_downgrade_go_to_caution(monkeypatch):
@@ -144,7 +144,7 @@ def test_decide_truncation_flag_causes_caution():
     findings = _go_findings(scan_truncated={"timeline": True, "comments": False})
     verdict, reasons = decide(findings)
     assert verdict == CAUTION
-    assert any("timeline scan hit the page cap" in r for r in reasons)
+    assert any("timeline scan stopped early" in r for r in reasons)
 
 
 def test_graphql_paginate_flags_truncation():
@@ -223,4 +223,4 @@ def test_graphql_findings_flag_truncated_timeline(monkeypatch):
     assert findings["scan_truncated"] == {"timeline": True, "comments": False, "labels": False}
     verdict, reasons = decide(findings)
     assert verdict == CAUTION
-    assert any("timeline scan hit the page cap" in r for r in reasons)
+    assert any("timeline scan stopped early" in r for r in reasons)

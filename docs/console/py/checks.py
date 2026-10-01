@@ -961,46 +961,76 @@ def check_issue(owner, repo, number, payload=None):
     }
 
 
-def check_timeline(owner, repo, number):
+def check_timeline(owner, repo, number, pr_idle_days=None):
     """Find PRs linked to the issue via timeline cross-reference events.
 
     These events never appear in the issue comments, which is the main
     reason this tool exists.
 
-    Returns (linked, truncated): truncated is True when the timeline scan
-    hit the page cap with a full final page, so a linked PR beyond the cap
-    may have been missed.
+    Stops early (issues #166, #217) as soon as a TAKEN-decisive linked PR
+    is found: an open PR whose idle time does not exceed pr_idle_days
+    decides TAKEN on its own in decide(), so fetching further timeline
+    pages or PR details cannot change the verdict. The stop predicate
+    mirrors decide()'s TAKEN branch exactly, including the fail-closed
+    treatment of unknown idle time.
+
+    Returns (linked, truncated): truncated is True when the scan stopped
+    early at the page cap with a full final page OR stopped early on a
+    decisive PR, so a linked PR beyond the scan may have been missed.
+    run_checks reports the truncation and decide() still lets TAKEN win
+    over the CAUTION the truncation adds.
     """
+    if pr_idle_days is None:
+        pr_idle_days = DEFAULT_PR_IDLE_DAYS
     endpoint = f"repos/{owner}/{repo}/issues/{number}/timeline"
-    events, truncated = _paged_list(endpoint)
+    max_pages = budget.effective_cap(MAX_SCAN_PAGES, "scan_pages")
     linked = []
     seen = set()
-    for event in events:
-        if event.get("event") not in ("cross-referenced", "connected"):
-            continue
-        src = (event.get("source") or {}).get("issue") or {}
-        match = PR_URL_RE.match(src.get("html_url") or "")
-        if not match:
-            continue
-        pr_owner, pr_repo, pr_number = match.groups()
-        key = (pr_owner, pr_repo, pr_number)
-        if key in seen:
-            continue
-        seen.add(key)
-        pr = gh_api(f"repos/{pr_owner}/{pr_repo}/pulls/{pr_number}")
-        updated_at = pr.get("updated_at")
-        pr_info = {
-            "number": int(pr_number),
-            "title": pr.get("title"),
-            "state": pr.get("state"),
-            "merged": bool(pr.get("merged_at")),
-            "author": (pr.get("user") or {}).get("login"),
-            "url": pr.get("html_url"),
-            "updated_at": updated_at,
-            "idle_days": days_since(updated_at),
-        }
-        pr_info["age_label"] = pr_age_label(pr_info)
-        linked.append(pr_info)
+    truncated = False
+    for page in range(1, max_pages + 1):
+        batch = _require_list(
+            gh_api(endpoint, {"per_page": "100", "page": str(page)}),
+            endpoint,
+        )
+        for event in batch:
+            if event.get("event") not in ("cross-referenced", "connected"):
+                continue
+            src = (event.get("source") or {}).get("issue") or {}
+            match = PR_URL_RE.match(src.get("html_url") or "")
+            if not match:
+                continue
+            pr_owner, pr_repo, pr_number = match.groups()
+            key = (pr_owner, pr_repo, pr_number)
+            if key in seen:
+                continue
+            seen.add(key)
+            pr = gh_api(f"repos/{pr_owner}/{pr_repo}/pulls/{pr_number}")
+            updated_at = pr.get("updated_at")
+            pr_info = {
+                "number": int(pr_number),
+                "title": pr.get("title"),
+                "state": pr.get("state"),
+                "merged": bool(pr.get("merged_at")),
+                "author": (pr.get("user") or {}).get("login"),
+                "url": pr.get("html_url"),
+                "updated_at": updated_at,
+                "idle_days": days_since(updated_at),
+            }
+            pr_info["age_label"] = pr_age_label(pr_info)
+            linked.append(pr_info)
+            idle = pr_info["idle_days"]
+            if pr_info["state"] == "open" and not (idle is not None and idle > pr_idle_days):
+                # TAKEN-decisive: decide() reports TAKEN on this PR alone.
+                # Note: truncated=True here is over-conservative when the
+                # decisive PR is the last item of a short final page (the
+                # scan was actually complete), but harmless: TAKEN outranks
+                # the CAUTION that truncation adds in decide().
+                return linked, True
+        if len(batch) < 100:
+            break
+        if page == max_pages:
+            # Full page at the cap: the API may hold more items we did not fetch.
+            truncated = True
     return linked, truncated
 
 
@@ -1412,7 +1442,12 @@ def run_checks(
     }
     if decide(findings)[0] == TAKEN:
         return _finish(findings, include_comments)
-    linked_prs, timeline_truncated = check_timeline(owner, repo, number)
+    linked_prs, timeline_truncated = check_timeline(
+        owner,
+        repo,
+        number,
+        pr_idle_days=findings["thresholds"].get("pr_idle_days", DEFAULT_PR_IDLE_DAYS),
+    )
     findings["linked_prs"] = linked_prs
     findings["scan_truncated"]["timeline"] = timeline_truncated
     findings["stages_skipped"] = ["claimants", "ai_policy", "repo_health"]
