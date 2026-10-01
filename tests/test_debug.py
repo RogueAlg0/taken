@@ -121,11 +121,14 @@ def test_debug_report_printed_on_failure(monkeypatch, capsys):
     assert report["rate_limit"] == {"start": None, "end": None}
 
 
-def test_debug_report_contains_only_safe_stats(monkeypatch):
-    monkeypatch.setattr(checks, "_CACHE_ENABLED", False)
-    monkeypatch.setattr(checks.subprocess, "run", lambda *a, **k: Proc('{"ok": true}'))
+def test_debug_report_contains_only_safe_stats():
+    # Hermetic: record the stats directly instead of timing a subprocess
+    # call. Going through gh_api() mixes a real wall-clock measurement
+    # into phases["rest"], which made the exact == 0.5 below flaky under
+    # CI load (observed 0.501).
     checks.reset_api_stats()
-    checks.gh_api("repos/octo/repo")
+    checks.record_api_call("repos/octo/repo")
+    checks.record_bytes(12)
     checks.record_phase("rest", 0.5)
     checks.record_retry(1.25)
     blob = checks.debug_report(2.5, {"core_remaining": 1}, {"core_remaining": 0})

@@ -167,6 +167,23 @@ def test_gh_api_rejects_unsafe_endpoint():
             raise AssertionError(f"gh_api accepted unsafe endpoint: {bad!r}")
 
 
+def test_gh_api_run_revalidates_endpoint_at_subprocess_boundary(monkeypatch):
+    """_gh_api_run must refuse an unsafe endpoint even if a future caller
+    forgets the check in gh_api(); the subprocess call must never run."""
+    from taken import checks
+
+    def boom(*args, **kwargs):
+        raise AssertionError("subprocess.run must not be reached")
+
+    monkeypatch.setattr(checks.subprocess, "run", boom)
+    try:
+        checks._gh_api_run(["gh", "api", "--help"], "--help", paced=False)
+    except checks.TakenError:
+        pass
+    else:
+        raise AssertionError("_gh_api_run accepted unsafe endpoint")
+
+
 def test_gh_api_accepts_plain_endpoints():
     from taken import checks
 

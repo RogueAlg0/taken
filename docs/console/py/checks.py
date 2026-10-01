@@ -772,6 +772,12 @@ def _gh_api_run(cmd, endpoint, paced):
     wait, the subprocess, and any retry backoff are all serialized and
     two search subprocesses can never be in flight at once.
     """
+    # Defense in depth: re-validate the endpoint at the subprocess boundary
+    # so no future caller can reach subprocess.run with an unvalidated path.
+    # The allowlist admits only plain API path characters (never a leading
+    # dash, a space, or shell metacharacters), and the command is passed as
+    # a list without shell=True, so argument injection is not possible.
+    _require_safe_endpoint(endpoint)
     attempt = 0
     while True:
         if paced:

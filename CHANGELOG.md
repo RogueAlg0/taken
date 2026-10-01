@@ -40,6 +40,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - CI no longer carries the `merge_group` trigger: merge queues require an
   organization-owned repository, so the trigger could never fire here.
 
+### Security
+- The GitHub API endpoint allowlist is now re-validated at the subprocess
+  boundary, so no caller can reach `subprocess.run` with an unvalidated
+  path (defense in depth; the command already ran as a list without a
+  shell).
+
 ## [0.7.4] - 2026-09-30
 
 ### Fixed
