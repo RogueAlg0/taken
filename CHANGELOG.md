@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-10-01
+
+### Added
+- npm installer (`taken-gh`): `npm install taken-gh` now pulls the matching
+  Python CLI through pip in a postinstall step, with `taken` and `taken-mcp`
+  shims on PATH. The postinstall skips when the installed version already
+  matches, reinstalls on version mismatch, and retries once with
+  `--break-system-packages` on PEP 668 systems (Debian 12+, Ubuntu 23.04+).
+  It never fails the npm install. README and the npm page carry an npm
+  version badge.
+- `taken --health owner/repo`: maintainer-facing repo health overview.
+  Read-only report listing claims waiting on a maintainer reply (oldest
+  first), claims where the claimant went quiet, open PRs grouped by idle
+  age, stale `good first issue` / `hacktoberfest` labels, and untriaged
+  issues. Summary counts on top, `--json` output, tunable thresholds
+  (`--claim-wait-days`, `--pr-stale-days`, `--gfi-stale-days`).
+- `--discover` now allocates the verify budget across repositories with
+  Thompson sampling: each repository is a bandit arm, a clean GO is a
+  success, a clean non-GO is a failure, and transport errors do not update
+  the arm. `--allocation {bandit,recency}` and `--explore-floor` tune it;
+  recency ordering is preserved within each repository.
+- `DiscoverOptions` dataclass replaces the long parameter list on
+  `discover()`; the stale-claim decay thresholds are threaded through
+  `--discover` and the MCP `discover_candidates` tool.
+- MCP tools now return machine-readable error codes instead of plain
+  strings.
+
+### Fixed
+- Homebrew tap bump workflow requirements path.
+
+### Changed
+- CI no longer carries the `merge_group` trigger: merge queues require an
+  organization-owned repository, so the trigger could never fire here.
+
 ## [0.7.4] - 2026-09-30
 
 ### Fixed
