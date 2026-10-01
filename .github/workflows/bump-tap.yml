@@ -89,7 +89,7 @@ jobs:
             exit 0
           fi
           git checkout -b "${BRANCH}"
-          python3 -m pip install --quiet --break-system-packages --require-hashes -r .github/requirements-resolver.txt
+          python3 -m pip install --quiet --break-system-packages --require-hashes -r "${GITHUB_WORKSPACE}/.github/requirements-resolver.txt"
           python3 "${GITHUB_WORKSPACE}/.github/scripts/resolve_tap_resources.py" \
             "${VER}" /tmp/tap-resources.json
           python3 "${GITHUB_WORKSPACE}/.github/scripts/rewrite_tap_formula.py" \
