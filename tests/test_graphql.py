@@ -463,8 +463,9 @@ def test_merged_pr_state_normalizes_to_closed(monkeypatch):
 
 def test_missing_issue_raises_not_found(monkeypatch):
     repo = _repo_node(issue=None)
+    payload = _payload(repo)
     with pytest.raises(checks.NotFoundError):
-        _run_with_fake_transport(monkeypatch, _payload(repo))
+        _run_with_fake_transport(monkeypatch, payload)
 
 
 def test_missing_repo_raises_not_found(monkeypatch):
