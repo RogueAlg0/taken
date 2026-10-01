@@ -468,6 +468,8 @@ def test_mcp_and_cli_verdict_parity_on_graphql_path(monkeypatch, faked):
     _, cli_verdict, cli_reasons, _ = cli.check_one("octo", "repo", 1, None, mode="graphql")
     assert mcp_payload["verdict"] == cli_verdict
     assert mcp_payload["reasons"] == cli_reasons
+
+
 @pytest.mark.parametrize(
     ("error", "code"),
     [
