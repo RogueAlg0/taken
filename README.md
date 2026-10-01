@@ -84,6 +84,12 @@ Useful flags:
   (default: 7)
 - `--claim-silence-complex-days N`: stale-claim decay: days one claim blocks
   as CAUTION on a complex issue (default: 14)
+- `--health`: maintainer report for one repo instead of a contributor verdict:
+  `taken --health owner/repo` lists claims waiting on a maintainer reply,
+  claims gone quiet after a reply, stale PRs, stale `good first issue` /
+  `hacktoberfest` labels, and untriaged issues. Read-only, exit 0.
+  `--claim-wait-days` (default: 7), `--pr-stale-days` (default: 14), and
+  `--gfi-stale-days` (default: 30) tune the thresholds.
 - `--version`, `--help`
 
 Exit codes: 0 means GO, 1 means TAKEN, 2 means CAUTION, 3 means something

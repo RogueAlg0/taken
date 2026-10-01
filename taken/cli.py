@@ -7,7 +7,7 @@ import re
 import sys
 import time
 
-from taken import __version__, budget, checks, discover, graphql
+from taken import __version__, budget, checks, discover, graphql, health
 from taken.verdict import CAUTION, GO, TAKEN, decide
 
 EXIT_CODES = {GO: 0, TAKEN: 1, CAUTION: 2}
@@ -128,6 +128,38 @@ def build_parser():
         metavar="P",
         help="discover: probability a bandit pick explores uniformly "
         "instead of following sampled yields (default: 0.15)",
+    )
+    parser.add_argument(
+        "--health",
+        action="store_true",
+        help="report maintainer-facing repo health for one owner/repo target "
+        "(claims waiting, stale PRs, stale beginner labels, untriaged issues); "
+        "read-only, no verdicts",
+    )
+    parser.add_argument(
+        "--claim-wait-days",
+        type=_non_negative_int,
+        default=health.DEFAULT_CLAIM_WAIT_DAYS,
+        metavar="N",
+        help="health: a claim with no maintainer reply counts as waiting after N days; "
+        "a claim gone quiet after a maintainer reply counts after N days "
+        f"(default: {health.DEFAULT_CLAIM_WAIT_DAYS})",
+    )
+    parser.add_argument(
+        "--pr-stale-days",
+        type=_non_negative_int,
+        default=health.DEFAULT_PR_STALE_DAYS,
+        metavar="N",
+        help="health: an open PR counts as stale after N days without activity "
+        f"(default: {health.DEFAULT_PR_STALE_DAYS})",
+    )
+    parser.add_argument(
+        "--gfi-stale-days",
+        type=_non_negative_int,
+        default=health.DEFAULT_GFI_STALE_DAYS,
+        metavar="N",
+        help="health: a good first issue or hacktoberfest label counts as stale "
+        f"after N days untouched (default: {health.DEFAULT_GFI_STALE_DAYS})",
     )
     parser.add_argument("--json", action="store_true", help="print the full findings as JSON")
     parser.add_argument(
@@ -309,6 +341,22 @@ def main(argv=None):
         if args.targets or args.file:
             parser.error("--discover takes no targets")
         return _run_with_stats(run_discover, args, verbose=args.verbose, debug=args.debug)
+    if args.health:
+        if args.file:
+            parser.error("--health takes a single owner/repo target, not --file")
+        if len(targets) != 1:
+            parser.error("--health takes exactly one owner/repo target")
+        parsed = parse_target(targets[0])
+        if not parsed or parsed[0] != "repo":
+            print(
+                f"error: --health needs an owner/repo target, got {targets[0]!r}",
+                file=sys.stderr,
+            )
+            return 3
+        _, owner, repo = parsed
+        return _run_with_stats(
+            run_health, owner, repo, args, verbose=args.verbose, debug=args.debug
+        )
     if not targets:
         parser.error("need at least one target, --file, or --discover")
     if len(targets) == 1:
@@ -546,6 +594,34 @@ def run_single(text, args):
     else:
         print(format_human(findings, verdict, reasons))
     return EXIT_CODES[verdict]
+
+
+def run_health(owner, repo, args):
+    """Print the maintainer health report for one repo. Read-only; exit 0."""
+    options = health.HealthOptions(
+        claim_wait_days=args.claim_wait_days,
+        pr_stale_days=args.pr_stale_days,
+        gfi_stale_days=args.gfi_stale_days,
+    )
+    try:
+        report = health.repo_health(owner, repo, options=options, me=args.me)
+    except checks.TakenError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "target": f"{owner}/{repo}",
+                    "health": health.health_to_dict(report),
+                    "budget": checks.budget_report(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        print(health.format_health_human(report))
+    return 0
 
 
 def format_batch_line(target, verdict, reasons):
