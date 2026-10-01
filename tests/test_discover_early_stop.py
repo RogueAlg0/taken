@@ -85,7 +85,7 @@ def test_early_stop_fires_when_top_limit_decided(monkeypatch):
         monkeypatch,
         [(1, 1, 5), (2, 2, 5), (3, 40, 6), (4, 40, 6), (5, 40, 6)],
     )
-    results = discover.discover(limit=2, jobs=1)
+    results = discover.discover(discover.DiscoverOptions(limit=2, jobs=1))
     assert [r["target"] for r in results] == ["o/r#1", "o/r#2"]
     assert [r["score"] for r in results] == [5, 5]
     assert calls == [1, 2]
@@ -101,7 +101,7 @@ def test_no_early_stop_while_fresh_candidate_remains(monkeypatch):
         monkeypatch,
         [(1, 1, 5), (2, 2, 5), (3, 3, 1), (4, 40, 1), (5, 50, 1)],
     )
-    results = discover.discover(limit=2, jobs=1)
+    results = discover.discover(discover.DiscoverOptions(limit=2, jobs=1))
     assert calls == [1, 2, 3]
     assert results.verified == 3
     assert results.total == 5
@@ -119,12 +119,12 @@ def test_early_stop_matches_full_verification(monkeypatch):
         (7, 60, 2),
     ]
     _stub(monkeypatch, plan)
-    full = discover.discover(limit=10, jobs=1)
+    full = discover.discover(discover.DiscoverOptions(limit=10, jobs=1))
     assert full.verified == full.total == 7
     assert full.errors == 1
 
     _stub(monkeypatch, plan)
-    early = discover.discover(limit=2, jobs=1)
+    early = discover.discover(discover.DiscoverOptions(limit=2, jobs=1))
     assert early.verified < early.total
     assert [r["target"] for r in early] == [r["target"] for r in full[:2]]
     assert [r["score"] for r in early] == [r["score"] for r in full[:2]]
@@ -132,7 +132,7 @@ def test_early_stop_matches_full_verification(monkeypatch):
 
 def test_limit_zero_verifies_nothing(monkeypatch):
     calls = _stub(monkeypatch, [(1, 1, 6), (2, 2, 6)])
-    results = discover.discover(limit=0, jobs=1)
+    results = discover.discover(discover.DiscoverOptions(limit=0, jobs=1))
     assert results == []
     assert results.verified == 0
     assert results.total == 2
@@ -141,7 +141,7 @@ def test_limit_zero_verifies_nothing(monkeypatch):
 
 def test_verified_counts_everything_when_stop_never_fires(monkeypatch):
     calls = _stub(monkeypatch, [(1, 1, 2), (2, 40, 1), (3, 3, "error")])
-    results = discover.discover(limit=10, jobs=1)
+    results = discover.discover(discover.DiscoverOptions(limit=10, jobs=1))
     assert [r["target"] for r in results] == ["o/r#1", "o/r#2"]
     assert results.verified == 3
     assert results.total == 3
@@ -180,7 +180,7 @@ def test_no_submission_after_stop_with_blocking_verifier(monkeypatch):
     results_holder = {}
 
     def run():
-        results_holder["results"] = discover.discover(limit=1, jobs=2)
+        results_holder["results"] = discover.discover(discover.DiscoverOptions(limit=1, jobs=2))
 
     worker = threading.Thread(target=run, daemon=True)
     worker.start()

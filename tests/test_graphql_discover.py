@@ -64,7 +64,7 @@ def stubbed(monkeypatch):
 
 
 def test_discover_graphql_mode_reaches_verification(stubbed, capsys):
-    results = discover.discover(mode="graphql", jobs=1)
+    results = discover.discover(discover.DiscoverOptions(mode="graphql", jobs=1))
     assert [r["target"] for r in results] == ["o/r#1"]
     assert len(stubbed) == 1
     assert stubbed[0]["mode"] == "graphql"
@@ -87,8 +87,8 @@ def test_discover_persistent_mode_uses_thread_local_session(stubbed):
 def _record_discover(monkeypatch):
     seen = {}
 
-    def fake_discover(**kwargs):
-        seen.update(kwargs)
+    def fake_discover(options=None):
+        seen["options"] = options
         return discover.DiscoverResults()
 
     monkeypatch.setattr(discover, "discover", fake_discover)
@@ -98,16 +98,16 @@ def _record_discover(monkeypatch):
 def test_cli_discover_graphql_flag_plumbed(monkeypatch, capsys):
     seen = _record_discover(monkeypatch)
     assert main(["--discover", "--graphql", "--label", "good first issue"]) == 0
-    assert seen["mode"] == "graphql"
+    assert seen["options"].mode == "graphql"
 
 
 def test_cli_discover_persistent_flag_plumbed(monkeypatch, capsys):
     seen = _record_discover(monkeypatch)
     assert main(["--discover", "--persistent-session", "--label", "good first issue"]) == 0
-    assert seen["mode"] == "persistent"
+    assert seen["options"].mode == "persistent"
 
 
 def test_cli_discover_defaults_to_rest(monkeypatch, capsys):
     seen = _record_discover(monkeypatch)
     assert main(["--discover", "--label", "good first issue"]) == 0
-    assert seen["mode"] == "rest"
+    assert seen["options"].mode == "rest"

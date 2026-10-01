@@ -156,7 +156,7 @@ def test_discover_tie_break_prefers_recent(monkeypatch):
     # Two equal-score candidates: the more recently updated one ranks first.
     items = [search_item(1, 1), search_item(2, 2)]
     monkeypatch.setattr(checks, "gh_api", make_fake(items, {1: "go", 2: "go"}, {}))
-    results = discover.discover(label="good first issue")
+    results = discover.discover(discover.DiscoverOptions(label="good first issue"))
     assert [r["target"] for r in results] == ["octo/repo#1", "octo/repo#2"]
     assert results[0]["score"] == results[1]["score"]
 
@@ -185,7 +185,9 @@ def test_discover_uses_single_ord_label_search(monkeypatch, capsys):
     monkeypatch.setattr(checks, "gh_api", fake)
     searched = []
     # limit=50 returns the whole verify pool.
-    results = discover.discover(jobs=1, limit=50, on_searched=searched.append)
+    results = discover.discover(
+        discover.DiscoverOptions(jobs=1, limit=50, on_searched=searched.append)
+    )
     targets = [r["target"] for r in results]
     assert len(search_calls) == 1
     for lab in discover.SEARCH_LABELS:
@@ -303,7 +305,7 @@ def test_discover_results_carry_error_stats(monkeypatch):
         raise checks.TakenError("network down")
 
     monkeypatch.setattr(checks, "gh_api", fake)
-    results = discover.discover(label="good first issue", jobs=1)
+    results = discover.discover(discover.DiscoverOptions(label="good first issue", jobs=1))
     assert results == []
     assert results.errors == 1
     assert results.total == 1
@@ -325,7 +327,7 @@ def test_discover_comments_fetch_failure_is_per_candidate_error(monkeypatch):
         return real_fetch_comments(owner, repo, number)
 
     monkeypatch.setattr(checks, "fetch_comments", flaky_fetch_comments)
-    results = discover.discover(label="good first issue", jobs=1)
+    results = discover.discover(discover.DiscoverOptions(label="good first issue", jobs=1))
     assert [r["target"] for r in results] == ["octo/repo#2"]
     assert results.errors == 1
     assert results.total == 2
@@ -354,8 +356,8 @@ def test_score_candidate_explains(monkeypatch):
 
 
 def test_discover_parallel_matches_sequential(faked):
-    seq = discover.discover(label="good first issue", jobs=1)
-    par = discover.discover(label="good first issue", jobs=8)
+    seq = discover.discover(discover.DiscoverOptions(label="good first issue", jobs=1))
+    par = discover.discover(discover.DiscoverOptions(label="good first issue", jobs=8))
     assert [(r["target"], r["score"]) for r in par] == [(r["target"], r["score"]) for r in seq]
     assert len(par) == 2
 
@@ -366,7 +368,9 @@ def test_discover_progress_callback(faked):
     def track(done, total):
         calls.append((done, total))
 
-    results = discover.discover(label="good first issue", jobs=4, on_progress=track)
+    results = discover.discover(
+        discover.DiscoverOptions(label="good first issue", jobs=4, on_progress=track)
+    )
     assert results  # sanity: the fake still yields candidates
     total = calls[0][1]
     assert total == 3  # three candidates enter the pool
@@ -385,7 +389,9 @@ def test_discover_negative_limit_yields_empty_not_truncated(monkeypatch):
     """A negative limit must not slice off the top candidate (ranked[:-1])."""
     items = [search_item(1, 1), search_item(2, 2)]
     monkeypatch.setattr(checks, "gh_api", make_fake(items, {1: "go", 2: "go"}, {}))
-    results = discover.discover(label="good first issue", limit=-1, jobs=1)
+    results = discover.discover(
+        discover.DiscoverOptions(label="good first issue", limit=-1, jobs=1)
+    )
     assert results == []
     assert results.total == 2
 
@@ -441,7 +447,9 @@ def test_discover_fallback_keeps_partial_candidates(monkeypatch, capsys):
 
     monkeypatch.setattr(checks, "gh_api", fake)
     searched = []
-    results = discover.discover(jobs=1, limit=50, on_searched=searched.append)
+    results = discover.discover(
+        discover.DiscoverOptions(jobs=1, limit=50, on_searched=searched.append)
+    )
     targets = [r["target"] for r in results]
     assert "octo/repo#1" in targets
     assert "octo/repo#2" in targets
@@ -484,7 +492,7 @@ def test_discover_raises_when_every_label_search_fails(monkeypatch):
 
     monkeypatch.setattr(checks, "gh_api", fake)
     with pytest.raises(checks.TakenError, match="boom"):
-        discover.discover(jobs=1)
+        discover.discover(discover.DiscoverOptions(jobs=1))
 
 
 def test_discover_combined_search_success_reports_no_search_errors(monkeypatch):
@@ -500,7 +508,7 @@ def test_discover_combined_search_success_reports_no_search_errors(monkeypatch):
         return base(endpoint, params)
 
     monkeypatch.setattr(checks, "gh_api", fake)
-    results = discover.discover(jobs=1, limit=50)
+    results = discover.discover(discover.DiscoverOptions(jobs=1, limit=50))
     assert len(search_calls) == 1
     assert results.search_errors == []
     assert [r["target"] for r in results] == ["octo/repo#1"]
@@ -537,7 +545,7 @@ def test_discover_skips_issue_get_with_complete_search_item(monkeypatch):
         return base(endpoint, params)
 
     monkeypatch.setattr(checks, "gh_api", fake)
-    results = discover.discover(label="good first issue", jobs=1)
+    results = discover.discover(discover.DiscoverOptions(label="good first issue", jobs=1))
     assert [r["target"] for r in results] == ["octo/repo#1"]
     assert issue_gets == []  # fields came from the search item, not a GET
 

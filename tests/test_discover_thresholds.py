@@ -65,7 +65,7 @@ def test_discover_forwards_thresholds_to_run_checks(monkeypatch):
 
     monkeypatch.setattr(checks, "run_checks", spy)
     thresholds = {"pr_idle_days": 30, "claim_silence_days": 5, "claim_silence_complex_days": 9}
-    results = discover.discover(limit=5, thresholds=thresholds)
+    results = discover.discover(discover.DiscoverOptions(limit=5, thresholds=thresholds))
     assert seen, "expected run_checks to be called during verification"
     assert all(t == thresholds for t in seen)
     assert [r["target"] for r in results] == ["octo/repo#1"]
@@ -81,7 +81,7 @@ def test_discover_passes_none_thresholds_by_default(monkeypatch):
         return real_run_checks(owner, repo, number, me=me, payload=payload, thresholds=thresholds)
 
     monkeypatch.setattr(checks, "run_checks", spy)
-    discover.discover(limit=5)
+    discover.discover(discover.DiscoverOptions(limit=5))
     assert seen, "expected run_checks to be called during verification"
     assert all(t is None for t in seen)
 
@@ -89,8 +89,8 @@ def test_discover_passes_none_thresholds_by_default(monkeypatch):
 def _capture_discover(monkeypatch):
     captured = {}
 
-    def fake_discover(**kwargs):
-        captured.update(kwargs)
+    def fake_discover(options=None):
+        captured["options"] = options
         return discover.DiscoverResults([], errors=0, total=0, verified=0)
 
     monkeypatch.setattr(discover, "discover", fake_discover)
@@ -100,7 +100,7 @@ def _capture_discover(monkeypatch):
 def test_discover_cli_flags_reach_discover(monkeypatch):
     captured = _capture_discover(monkeypatch)
     assert main(["--discover", "--pr-idle-days", "30"]) == 0
-    assert captured["thresholds"] == {
+    assert captured["options"].thresholds == {
         "pr_idle_days": 30,
         "claim_silence_days": checks.DEFAULT_CLAIM_SILENCE_DAYS,
         "claim_silence_complex_days": checks.DEFAULT_CLAIM_SILENCE_COMPLEX_DAYS,
@@ -110,23 +110,21 @@ def test_discover_cli_flags_reach_discover(monkeypatch):
 def test_discover_cli_uses_default_thresholds_without_flags(monkeypatch):
     captured = _capture_discover(monkeypatch)
     assert main(["--discover"]) == 0
-    assert captured["thresholds"] == checks.default_thresholds()
+    assert captured["options"].thresholds == checks.default_thresholds()
 
 
 def test_discover_candidates_forwards_thresholds(monkeypatch):
     captured = _capture_discover(monkeypatch)
     payload = discover_candidates(pr_idle_days=30)
-    assert captured["thresholds"]["pr_idle_days"] == 30
-    assert captured["thresholds"]["claim_silence_days"] == checks.DEFAULT_CLAIM_SILENCE_DAYS
-    assert (
-        captured["thresholds"]["claim_silence_complex_days"]
-        == checks.DEFAULT_CLAIM_SILENCE_COMPLEX_DAYS
-    )
-    assert payload["effective_parameters"]["thresholds"] == captured["thresholds"]
+    thresholds = captured["options"].thresholds
+    assert thresholds["pr_idle_days"] == 30
+    assert thresholds["claim_silence_days"] == checks.DEFAULT_CLAIM_SILENCE_DAYS
+    assert thresholds["claim_silence_complex_days"] == checks.DEFAULT_CLAIM_SILENCE_COMPLEX_DAYS
+    assert payload["effective_parameters"]["thresholds"] == thresholds
 
 
 def test_discover_candidates_defaults_thresholds(monkeypatch):
     captured = _capture_discover(monkeypatch)
     payload = discover_candidates()
-    assert captured["thresholds"] == checks.default_thresholds()
+    assert captured["options"].thresholds == checks.default_thresholds()
     assert payload["effective_parameters"]["thresholds"] == checks.default_thresholds()

@@ -10,6 +10,8 @@ anywhere. No aggregator filters on that.
 import concurrent.futures
 import threading
 from collections import deque
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from . import budget, checks, graphql
@@ -21,6 +23,42 @@ SEARCH_PER_PAGE = 50
 # (see taken/budget.py).
 VERIFY_POOL = 40
 DEFAULT_JOBS = 8
+
+
+@dataclass
+class DiscoverOptions:
+    """All the knobs for discover(), in one place (issue #45).
+
+    limit: max candidates returned; negative values clamp to 0, and 0
+        skips verification entirely.
+    language: only consider repositories in this language (None: no filter).
+    label: issue label to search (None: good-first-issue style labels).
+    min_contributors: only consider repos with at least this many
+        contributors in the last 90 days.
+    me: GitHub login; the caller's own comments are ignored in the
+        claimant scan.
+    jobs: max concurrent verifications.
+    on_progress: called as on_progress(done, total) from the calling
+        thread as each candidate finishes, so callers can drive a
+        progress bar.
+    on_searched: called as on_searched([(label, count)]) after the search
+        phase, so callers can report what was searched.
+    mode: verification fetch path: "rest" (default), "graphql", or
+        "persistent" (see graphql.fetch_mode).
+    thresholds: stale-claim decay settings (issue #83); None means the
+        defaults.
+    """
+
+    limit: int = 10
+    language: str | None = None
+    label: str | None = None
+    min_contributors: int = 0
+    me: str | None = None
+    jobs: int = DEFAULT_JOBS
+    on_progress: Callable | None = None
+    on_searched: Callable | None = None
+    mode: str = "rest"
+    thresholds: dict | None = None
 
 
 def _verify_pool_size():
@@ -315,36 +353,15 @@ def _collect_candidates_per_label(labels, language, updated_after):
     return candidates, searched, search_errors
 
 
-def discover(
-    limit=10,
-    language=None,
-    label=None,
-    min_contributors=0,
-    me=None,
-    jobs=DEFAULT_JOBS,
-    on_progress=None,
-    on_searched=None,
-    mode="rest",
-    thresholds=None,
-):
+def discover(options=None):
     """Search, verify, and rank contribution candidates.
 
-    Candidates are verified concurrently (jobs threads). on_progress, when
-    given, is called as on_progress(done, total) from the calling thread as
-    each candidate finishes, so callers can drive a progress bar.
-    on_searched, when given, is called as on_searched([(labels, count)])
-    after the search phase, so callers can report what was searched: one
-    entry carrying the comma-joined labels and the single query's result
-    count.
-    mode selects the verification fetch path: "rest" (default), "graphql",
-    or "persistent" (see graphql.fetch_mode).
-    thresholds carries the stale-claim decay settings (issue #83); None
-    means the defaults (issue #238: the CLI and MCP wrappers pass the
-    caller's settings through instead of silently dropping them).
-
-    Returns a DiscoverResults (a list of dicts sorted by score (desc),
-    then recency (desc)) with .errors / .total stats, so callers can tell
-    "no GO candidates" apart from "verification kept failing", plus
+    Takes a single DiscoverOptions object (issue #45) instead of a
+    sprawling keyword list; None means all defaults. Candidates are
+    verified concurrently (options.jobs threads). Returns a
+    DiscoverResults (a list of dicts sorted by score (desc), then recency
+    (desc)) with .errors / .total stats, so callers can tell "no GO
+    candidates" apart from "verification kept failing", plus
     .search_errors [(label, error)] when the search phase fell back to
     per-label queries and some of them failed: target, score, why, verdict,
     reasons, findings, updated_at, friendly_labels (first-time-contributor
@@ -362,19 +379,23 @@ def discover(
     candidates were actually submitted, so callers can distinguish a pool
     of 80 verified in full from one cut short at 23.
     """
+    if options is None:
+        options = DiscoverOptions()
     # A negative limit is meaningless; clamp to 0 (empty result) instead of
     # letting ranked[:limit] silently drop the top candidates. This also
     # covers the MCP discover_candidates path, which bypasses argparse.
-    limit = max(0, limit)
+    limit = max(0, options.limit)
     updated_after = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
-    labels = [label] if label else SEARCH_LABELS
-    candidates, searched, search_errors = _collect_candidates(labels, language, updated_after)
-    if on_searched is not None:
-        on_searched(searched)
+    labels = [options.label] if options.label else SEARCH_LABELS
+    candidates, searched, search_errors = _collect_candidates(
+        labels, options.language, updated_after
+    )
+    if options.on_searched is not None:
+        options.on_searched(searched)
 
     total = len(candidates)
-    if on_progress is not None:
-        on_progress(0, total)
+    if options.on_progress is not None:
+        options.on_progress(0, total)
     if limit == 0:
         # Nothing can make the cut; skip verification entirely.
         return DiscoverResults([], errors=0, total=total, verified=0, search_errors=search_errors)
@@ -382,7 +403,7 @@ def discover(
     errors = 0
     verified = 0
     banked_scores = []
-    workers = max(1, jobs)
+    workers = max(1, options.jobs)
     # Rolling submission (issue #214): at most `workers` candidates are in
     # flight at any time. The stop proof is evaluated after every
     # completion and BEFORE replacement work is submitted, so no candidate
@@ -409,10 +430,10 @@ def discover(
                 repo,
                 number,
                 item,
-                min_contributors,
-                me,
-                mode,
-                thresholds=thresholds,
+                options.min_contributors,
+                options.me,
+                options.mode,
+                thresholds=options.thresholds,
             )
             in_flight[future] = idx
             # .verified counts submitted verification work, not consumed
@@ -437,8 +458,8 @@ def discover(
                 del ceilings[idx]
                 entry, error = future.result()
                 done += 1
-                if on_progress is not None:
-                    on_progress(done, total)
+                if options.on_progress is not None:
+                    options.on_progress(done, total)
                 if error is not None:
                     errors += 1
                 elif entry is not None:

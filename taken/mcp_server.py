@@ -288,7 +288,7 @@ def discover_candidates(
         "thresholds": thresholds,
     }
     try:
-        results = discover.discover(
+        options = discover.DiscoverOptions(
             limit=limit,
             language=language,
             label=label,
@@ -300,6 +300,7 @@ def discover_candidates(
             mode=graphql.fetch_mode(),
             thresholds=thresholds,
         )
+        results = discover.discover(options)
     except checks.TakenError as exc:
         return {"effective_parameters": effective_parameters, "error": str(exc)}
     return {

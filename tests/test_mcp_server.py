@@ -258,7 +258,7 @@ def test_discover_candidates_verifies_and_ranks(monkeypatch):
 
 
 def test_discover_candidates_echoes_effective_default_parameters(monkeypatch):
-    monkeypatch.setattr(discover, "discover", lambda **kwargs: [])
+    monkeypatch.setattr(discover, "discover", lambda options=None: [])
     payload = discover_candidates()
     assert payload["effective_parameters"] == {
         "limit": 10,
@@ -276,7 +276,7 @@ def test_discover_candidates_echoes_effective_default_parameters(monkeypatch):
 
 
 def test_discover_candidates_error_echoes_effective_parameters(monkeypatch):
-    def boom(**kwargs):
+    def boom(options=None):
         raise checks.TakenError("search unavailable")
 
     monkeypatch.setattr(discover, "discover", boom)
@@ -436,20 +436,20 @@ def test_discover_candidates_uses_automatic_mode(monkeypatch):
     class FakeResults(list):
         search_errors = []
 
-    def fake_discover(**kwargs):
-        seen.update(kwargs)
+    def fake_discover(options=None):
+        seen["options"] = options
         return FakeResults()
 
     monkeypatch.setattr(discover, "discover", fake_discover)
     monkeypatch.setattr(checks, "_github_identity", lambda: "someone")
     out = discover_candidates(limit=3)
-    assert seen["mode"] == "graphql"
+    assert seen["options"].mode == "graphql"
     assert out["results"] == []
     assert out["search_errors"] == []
     # Anonymous stays on REST.
     monkeypatch.setattr(checks, "_github_identity", lambda: None)
     discover_candidates(limit=3)
-    assert seen["mode"] == "rest"
+    assert seen["options"].mode == "rest"
 
 
 def test_mcp_and_cli_verdict_parity_on_graphql_path(monkeypatch, faked):

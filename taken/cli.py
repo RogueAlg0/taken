@@ -368,7 +368,7 @@ def run_discover(args):
         print(f"searched: {detail}", file=sys.stderr)
 
     try:
-        results = discover.discover(
+        options = discover.DiscoverOptions(
             limit=args.limit,
             language=args.language,
             label=args.label,
@@ -380,6 +380,7 @@ def run_discover(args):
             mode=graphql.fetch_mode(args),
             thresholds=_thresholds_from_args(args),
         )
+        results = discover.discover(options)
     except checks.TakenError as exc:
         if bar is not None:
             bar.close()
