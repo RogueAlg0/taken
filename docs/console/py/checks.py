@@ -1070,14 +1070,69 @@ def fetch_comments(owner, repo, number):
     return _paged_list(endpoint)
 
 
-def check_claimants(owner, repo, number, me=None):
+def check_claimants(owner, repo, number, me=None, return_comments=False):
     """Fetch issue comments and scan them for claimant language.
 
     Returns (hits, truncated): truncated is True when the comment scan hit
     the page cap, so a claimant comment beyond the cap may have been missed.
+    With return_comments=True, returns (hits, comments, truncated) so a
+    caller that needs the raw comments (e.g. maintainer-engagement
+    scoring) can reuse the fetched pages instead of fetching them again.
     """
     comments, truncated = fetch_comments(owner, repo, number)
-    return find_claimant_hits(comments, me=me), truncated
+    hits = find_claimant_hits(comments, me=me)
+    if return_comments:
+        return hits, comments, truncated
+    return hits, truncated
+
+
+class RepoMemo:
+    """Per-run memo for repo-level fetches (ai_policy, repo_health).
+
+    discover() creates one per run; candidates from the same repo share a
+    single fetch even with --no-cache or a cold cache. Thread-safe: only
+    fetches for the SAME key serialize (via a per-key in-flight event),
+    so different repos still fetch in parallel and the memo never narrows
+    the run's concurrency. Findings are identical to the unmemoized path
+    because the underlying data cannot change within a run.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._data = {}
+        self._inflight = {}
+
+    def get(self, key, fn):
+        """Return the memoized value for key, computing it once via fn()."""
+        while True:
+            with self._lock:
+                if key in self._data:
+                    return self._data[key]
+                ev = self._inflight.get(key)
+                if ev is None:
+                    ev = threading.Event()
+                    self._inflight[key] = ev
+                    owner = True
+                else:
+                    owner = False
+            if not owner:
+                # Another thread is fetching this key; wait, then re-check.
+                # A failed fetch clears the in-flight marker, so a waiter
+                # whose fetch failed retries as the owner.
+                ev.wait()
+                continue
+            try:
+                val = fn()
+            except Exception:
+                with self._lock:
+                    del self._inflight[key]
+                    ev.set()
+                raise
+            with self._lock:
+                self._data[key] = val
+                del self._inflight[key]
+                ev.set()
+            return val
 
 
 def _first_line_with(text, phrase):
@@ -1267,7 +1322,16 @@ def check_repo_health(owner, repo, window_days=HEALTH_WINDOW_DAYS):
     }
 
 
-def run_checks(owner, repo, number, me=None, payload=None, thresholds=None):
+def run_checks(
+    owner,
+    repo,
+    number,
+    me=None,
+    payload=None,
+    thresholds=None,
+    include_comments=False,
+    repo_memo=None,
+):
     """Run the full read-only check suite on one issue; return findings.
 
     `payload` is an optional pre-fetched search/issues item: when it
@@ -1279,6 +1343,16 @@ def run_checks(owner, repo, number, me=None, payload=None, thresholds=None):
     None means the defaults from default_thresholds(). decide() reads
     them from the findings, so the early-stop checks below apply the
     same weakening rules as the final verdict.
+
+    `include_comments`: when True, return (findings, comments, truncated)
+    where comments are the raw issue comments fetched by the claimant
+    scan (None when the scan never ran because decide() stopped early).
+    Lets callers score maintainer engagement without re-fetching.
+
+    `repo_memo`: an optional checks.RepoMemo. Repo-level stages
+    (ai_policy, repo_health) are fetched once per repo per run instead of
+    once per candidate, which matters on a cold cache or --no-cache where
+    the response cache cannot absorb the duplicates.
 
     Fetches run cheapest-decisive-first and stop early as soon as decide()
     reports TAKEN: the issue call alone settles closed and assigned issues,
@@ -1337,35 +1411,61 @@ def run_checks(owner, repo, number, me=None, payload=None, thresholds=None):
         "stages_skipped": ["timeline", "claimants", "ai_policy", "repo_health"],
     }
     if decide(findings)[0] == TAKEN:
-        return findings
+        return _finish(findings, include_comments)
     linked_prs, timeline_truncated = check_timeline(owner, repo, number)
     findings["linked_prs"] = linked_prs
     findings["scan_truncated"]["timeline"] = timeline_truncated
     findings["stages_skipped"] = ["claimants", "ai_policy", "repo_health"]
     if decide(findings)[0] == TAKEN:
-        return findings
+        return _finish(findings, include_comments)
+
     # The tail stages are provably independent: no decide() runs between
     # them, so they can only append CAUTION reasons, never overturn a
     # verdict. Authenticated callers run them concurrently (issue #213);
     # the anonymous tier keeps the exact sequential behavior. Futures are
     # consumed in submission order, so the first error surfaces exactly
     # as it did sequentially.
+    #
+    # Repo-level stages go through the per-run memo when one is supplied:
+    # one fetch per repo instead of one per candidate.
+    def _get_policy():
+        if repo_memo is None:
+            return check_ai_policy(owner, repo)
+        return repo_memo.get(("ai_policy", owner, repo), lambda: check_ai_policy(owner, repo))
+
+    def _get_health():
+        if repo_memo is None:
+            return check_repo_health(owner, repo)
+        return repo_memo.get(("repo_health", owner, repo), lambda: check_repo_health(owner, repo))
+
+    claim_comments = None
     workers = min(3, budget.current().batch_workers)
     if workers > 1:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            claimants_future = pool.submit(check_claimants, owner, repo, number, me=me)
-            policy_future = pool.submit(check_ai_policy, owner, repo)
-            health_future = pool.submit(check_repo_health, owner, repo)
-            claimants, comments_truncated = claimants_future.result()
+            claimants_future = pool.submit(
+                check_claimants, owner, repo, number, me=me, return_comments=True
+            )
+            policy_future = pool.submit(_get_policy)
+            health_future = pool.submit(_get_health)
+            claimants, claim_comments, comments_truncated = claimants_future.result()
             ai_policy = policy_future.result()
             repo_health = health_future.result()
     else:
-        claimants, comments_truncated = check_claimants(owner, repo, number, me=me)
-        ai_policy = check_ai_policy(owner, repo)
-        repo_health = check_repo_health(owner, repo)
+        claimants, claim_comments, comments_truncated = check_claimants(
+            owner, repo, number, me=me, return_comments=True
+        )
+        ai_policy = _get_policy()
+        repo_health = _get_health()
     findings["claimants"] = claimants
     findings["scan_truncated"]["comments"] = comments_truncated
     findings["ai_policy"] = ai_policy
     findings["repo_health"] = repo_health
     findings["stages_skipped"] = []
+    return _finish(findings, include_comments, claim_comments, comments_truncated)
+
+
+def _finish(findings, include_comments, comments=None, truncated=False):
+    """Shape run_checks()' return for the include_comments flag."""
+    if include_comments:
+        return findings, comments, truncated
     return findings
