@@ -113,6 +113,22 @@ def build_parser():
         action="store_true",
         help="discover: hide the progress bar",
     )
+    parser.add_argument(
+        "--allocation",
+        choices=["bandit", "recency"],
+        default="bandit",
+        help="discover: how verify budget is split across repos: 'bandit' "
+        "spends it by Thompson sampling on each repo's observed GO yield "
+        "(default), 'recency' verifies freshest first",
+    )
+    parser.add_argument(
+        "--explore-floor",
+        type=float,
+        default=0.15,
+        metavar="P",
+        help="discover: probability a bandit pick explores uniformly "
+        "instead of following sampled yields (default: 0.15)",
+    )
     parser.add_argument("--json", action="store_true", help="print the full findings as JSON")
     parser.add_argument(
         "--verbose",
@@ -379,6 +395,8 @@ def run_discover(args):
             on_searched=on_searched,
             mode=graphql.fetch_mode(args),
             thresholds=_thresholds_from_args(args),
+            allocation=args.allocation,
+            explore_floor=args.explore_floor,
         )
         results = discover.discover(options)
     except checks.TakenError as exc:

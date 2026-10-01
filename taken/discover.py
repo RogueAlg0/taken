@@ -8,6 +8,7 @@ anywhere. No aggregator filters on that.
 """
 
 import concurrent.futures
+import random
 import threading
 from collections import deque
 from collections.abc import Callable
@@ -47,6 +48,14 @@ class DiscoverOptions:
         "persistent" (see graphql.fetch_mode).
     thresholds: stale-claim decay settings (issue #83); None means the
         defaults.
+    allocation: how verify-pool slots are assigned across repos: "bandit"
+        (default, issue #130) spends them by Thompson sampling on each
+        repo's observed GO yield, with an exploration floor so unseen
+        repos keep getting tried; "recency" keeps the previous
+        freshest-first order.
+    explore_floor: probability (0..1) that a bandit pick ignores the
+        sampled means and chooses uniformly among repos with candidates
+        still queued (default 0.15). Clamped to [0, 1].
     """
 
     limit: int = 10
@@ -59,6 +68,8 @@ class DiscoverOptions:
     on_searched: Callable | None = None
     mode: str = "rest"
     thresholds: dict | None = None
+    allocation: str = "bandit"
+    explore_floor: float = 0.15
 
 
 def _verify_pool_size():
@@ -353,6 +364,55 @@ def _collect_candidates_per_label(labels, language, updated_after):
     return candidates, searched, search_errors
 
 
+class _RepoBandit:
+    """Thompson-sampling allocator that spends verify budget across repos.
+
+    Issue #130. Each repo is an arm; the reward is 1 when a verified
+    candidate banks GO and 0 when it verifies cleanly to a non-GO
+    verdict. Transport failures (TakenError) carry no signal about the
+    repo, so they leave the arm untouched.
+
+    Arms start at the uniform Beta(1, 1) prior, so unseen repos are
+    genuinely competitive from the first draw. The exploration floor is
+    an extra guarantee: with probability `explore_floor` the pick is
+    uniform over every repo that still has candidates queued, so a
+    low-mean arm can never starve the unseen ones out entirely.
+
+    `rng` is injectable for deterministic tests; defaults to a fresh
+    random.Random.
+    """
+
+    def __init__(self, explore_floor=0.15, rng=None):
+        self.explore_floor = max(0.0, min(1.0, explore_floor))
+        self.rng = rng if rng is not None else random.Random()
+        self.arms = {}
+
+    def pick(self, repos):
+        """Choose the next repo to verify a candidate from.
+
+        `repos` is the non-empty list of repos with candidates still
+        queued. Returns one of them.
+        """
+        if self.rng.random() < self.explore_floor:
+            return self.rng.choice(repos)
+        best, best_sample = repos[0], -1.0
+        for repo in repos:
+            alpha, beta = self.arms.get(repo, (1.0, 1.0))
+            sample = self.rng.betavariate(alpha, beta)
+            if sample > best_sample:
+                best, best_sample = repo, sample
+        return best
+
+    def update(self, repo, success):
+        """Record one verified candidate: True banked GO, False did not."""
+        alpha, beta = self.arms.get(repo, (1.0, 1.0))
+        if success:
+            alpha += 1
+        else:
+            beta += 1
+        self.arms[repo] = (alpha, beta)
+
+
 def discover(options=None):
     """Search, verify, and rank contribution candidates.
 
@@ -385,6 +445,10 @@ def discover(options=None):
     # letting ranked[:limit] silently drop the top candidates. This also
     # covers the MCP discover_candidates path, which bypasses argparse.
     limit = max(0, options.limit)
+    if options.allocation not in ("bandit", "recency"):
+        raise ValueError(
+            f"unknown allocation: {options.allocation!r} (expected 'bandit' or 'recency')"
+        )
     updated_after = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
     labels = [options.label] if options.label else SEARCH_LABELS
     candidates, searched, search_errors = _collect_candidates(
@@ -416,13 +480,34 @@ def discover(options=None):
         idx: _score_ceiling(item.get("updated_at"))
         for idx, (_, _, _, item) in enumerate(candidates)
     }
+    bandit = None
+    repo_queues = None
     queue = deque(range(len(candidates)))
+    if options.allocation == "bandit":
+        # Group the pool by repo, keeping recency order inside each repo:
+        # the bandit chooses the repo, recency still chooses the
+        # candidate within it.
+        bandit = _RepoBandit(explore_floor=options.explore_floor)
+        repo_queues = {}
+        for idx, (owner, repo, _, _) in enumerate(candidates):
+            repo_queues.setdefault((owner, repo), deque()).append(idx)
+        queue = None
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         in_flight = {}
 
+        def has_work():
+            if bandit is not None:
+                return any(repo_queues.values())
+            return bool(queue)
+
         def submit_next():
             nonlocal verified
-            idx = queue.popleft()
+            if bandit is not None:
+                live = [r for r, q in repo_queues.items() if q]
+                repo = bandit.pick(live)
+                idx = repo_queues[repo].popleft()
+            else:
+                idx = queue.popleft()
             owner, repo, number, item = candidates[idx]
             future = pool.submit(
                 _verify_candidate,
@@ -445,7 +530,7 @@ def discover(options=None):
             remaining_ceiling = max(ceilings.values(), default=-1)
             return sum(1 for s in banked_scores if s > remaining_ceiling) >= limit
 
-        while queue and len(in_flight) < workers:
+        while has_work() and len(in_flight) < workers:
             submit_next()
         done = 0
         stopped = False
@@ -460,6 +545,12 @@ def discover(options=None):
                 done += 1
                 if options.on_progress is not None:
                     options.on_progress(done, total)
+                if bandit is not None and error is None:
+                    # A clean verification is one Bernoulli trial for the
+                    # repo: GO banked or not. A transport error says
+                    # nothing about the repo's yield, so it is skipped.
+                    owner, repo, _, _ = candidates[idx]
+                    bandit.update((owner, repo), entry is not None)
                 if error is not None:
                     errors += 1
                 elif entry is not None:
@@ -475,7 +566,7 @@ def discover(options=None):
                     stopped = True
                     break
             if not stopped:
-                while queue and len(in_flight) < workers:
+                while has_work() and len(in_flight) < workers:
                     submit_next()
     # Score desc, then recency desc: the freshest candidate wins ties.
     # (A single sort; the old double-sort accidentally left equal scores

@@ -137,7 +137,13 @@ first:
       1 GO candidate: octocat/hello-world#42 (good first issue)
 
 Candidates are verified in parallel (8 workers by default; `--jobs N`
-tunes it). A progress bar on stderr shows live feedback during the run;
+tunes it). The verify budget is split across repos by Thompson sampling
+on each repo's observed GO yield (issue #130): repos that keep producing
+candidates get more of the pool, while an exploration floor keeps unseen
+repos getting tried. `--allocation recency` restores the old
+freshest-first order, and `--explore-floor P` tunes how often the sampler
+explores uniformly instead of following sampled yields (default 0.15).
+A progress bar on stderr shows live feedback during the run;
 `--no-progress` hides it. The bar never touches stdout, so `--json`
 stays script-friendly.
 
