@@ -24,9 +24,9 @@
     },
     {
       "file": "taken/graphql.py",
-      "cc": 198,
-      "commits": 14,
-      "hotspot": 2772
+      "cc": 201,
+      "commits": 15,
+      "hotspot": 3015
     },
     {
       "file": "taken/verdict.py",
