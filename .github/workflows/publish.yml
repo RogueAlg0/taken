@@ -4,6 +4,14 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      npm_only_version:
+        description: >-
+          Version (X.Y.Z) to publish to npm only. Skips the PyPI, MCP
+          registry, and .deb jobs; they must already be done for this
+          version. Use only when the tag-triggered npm job could not run.
+        required: false
+        default: ""
 
 permissions:
   id-token: write
@@ -203,6 +211,70 @@ jobs:
         working-directory: npm
         # No NODE_AUTH_TOKEN on purpose: auth comes from the trusted
         # publisher configured on npmjs.com, exchanged via this job's
-        # id-token: write permission. Setting any token would make npm
+        # id-token. Anyone reusing this workflow file without that setup must
         # skip OIDC and fail.
         run: npm publish --access public --provenance
+
+  npm-only:
+    name: Publish npm installer only (manual recovery)
+    # Recovery path for when the tag-triggered npm job could not run
+    # (e.g. PyPI already had the version, so the normal publish job failed).
+    # No needs: this job must not depend on a fresh PyPI publish.
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.npm_only_version != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/v${{ github.event.inputs.npm_only_version }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          # Node 24 bundles npm >= 11.5.1, which supports OIDC trusted
+          # publishing, so no separate npm upgrade step is needed.
+          node-version: "24"
+      - name: Check the requested version is valid and ready
+        run: |
+          VER="${{ github.event.inputs.npm_only_version }}"
+          if ! printf '%s' "$VER" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "npm_only_version ($VER) is not a plain X.Y.Z version; refusing to publish."
+            exit 1
+          fi
+          NPM_VER=$(node -p "require('./npm/package.json').version")
+          if [ "$NPM_VER" != "$VER" ]; then
+            echo "npm/package.json version ($NPM_VER) does not match the requested version ($VER); refusing to publish."
+            exit 1
+          fi
+          # PyPI must already have this version: the npm postinstall step
+          # pip-installs taken-gh==$VER from PyPI.
+          for i in $(seq 1 10); do
+            if curl -sf "https://pypi.org/pypi/taken-gh/${VER}/json" -o /dev/null; then
+              echo "taken-gh ${VER} is live on PyPI"
+              exit 0
+            fi
+            echo "waiting for taken-gh ${VER} on PyPI (attempt $i/10)..."
+            sleep 20
+          done
+          echo "taken-gh ${VER} is not on PyPI; refusing to publish." >&2
+          exit 1
+      - name: Ensure npm supports OIDC trusted publishing
+        run: |
+          NPM_VER="$(npm --version)"
+          if [ "$(printf '%s\n%s\n' "11.5.1" "$NPM_VER" | sort -V | head -n 1)" != "11.5.1" ]; then
+            echo "npm $NPM_VER predates OIDC trusted publishing (needs >= 11.5.1); refusing to publish."
+            exit 1
+          fi
+      - name: Publish to npm
+        working-directory: npm
+        # No NODE_AUTH_TOKEN on purpose: auth comes from the trusted
+        # publisher configured on npmjs.com, exchanged via this job's
+        # id-token. Anyone reusing this workflow file without that setup must
+        # skip OIDC and fail.
+        run: |
+          VER="${{ github.event.inputs.npm_only_version }}"
+          if npm view "taken-gh@${VER}" version >/dev/null 2>&1; then
+            echo "taken-gh@${VER} is already published on npm; nothing to do."
+            exit 0
+          fi
+          npm publish --access public --provenance
