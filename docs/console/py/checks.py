@@ -596,21 +596,99 @@ def _sweep_expired():
         pass
 
 
+_PROTECTED_ROOTS = {
+    "",
+    "/",
+    "/home",
+    "/Users",
+    "/root",
+    "/etc",
+    "/var",
+    "/tmp",
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/private",
+    "/private/etc",
+    "/private/var",
+    "/private/tmp",
+    "/System",
+    "/Library",
+    "/Applications",
+    "/Volumes",
+    "/System/Volumes",
+    "/System/Volumes/Data",
+    "/System/Volumes/Data/home",
+    "/System/Volumes/Data/Users",
+    "/System/Volumes/Data/root",
+    "/System/Volumes/Data/private",
+}
+
+
 def _looks_like_taken_cache(cache_dir):
-    """Return True if every file under cache_dir looks like a taken cache file.
+    """Return True if cache_dir matches the exact taken cache structure.
 
     taken's on-disk cache contains only api_cache.json at the top level and
-    v2/<digest>.json entry files. If anything else is present, the directory
-    is not (only) a taken cache and must not be deleted wholesale.
+    v2/<digest>.json entry files directly under v2/. Temporary files created
+    during atomic writes (prefix '.cache-') under v2/ or at the root are also
+    tolerated.
+
+    Any unexpected file, unexpected subdirectory (including empty directories),
+    nested directory under v2/, or nested api_cache.json disqualifies the
+    directory. An arbitrary empty directory without taken cache artifacts
+    does not qualify.
     """
-    for root, _dirs, files in os.walk(cache_dir):
-        for name in files:
-            if name == "api_cache.json":
-                continue
-            if name.endswith(".json") and os.path.basename(root) == "v2":
-                continue
+    try:
+        if not os.path.isdir(cache_dir) or os.path.islink(cache_dir):
             return False
-    return True
+        root_entries = os.listdir(cache_dir)
+    except OSError:
+        return False
+
+    if not root_entries:
+        return False
+
+    has_cache_indicator = False
+
+    for name in root_entries:
+        path = os.path.join(cache_dir, name)
+        if name == "v2":
+            try:
+                if not os.path.isdir(path) or os.path.islink(path):
+                    return False
+                v2_entries = os.listdir(path)
+            except OSError:
+                return False
+            for v2_name in v2_entries:
+                v2_path = os.path.join(path, v2_name)
+                try:
+                    if os.path.isdir(v2_path) or os.path.islink(v2_path):
+                        return False
+                except OSError:
+                    return False
+                if v2_name == "api_cache.json":
+                    return False
+                if v2_name.endswith(".json") or v2_name.startswith(".cache-"):
+                    continue
+                return False
+            has_cache_indicator = True
+        elif name == "api_cache.json":
+            try:
+                if not os.path.isfile(path) or os.path.islink(path):
+                    return False
+            except OSError:
+                return False
+            has_cache_indicator = True
+        elif name.startswith(".cache-"):
+            try:
+                if not os.path.isfile(path) or os.path.islink(path):
+                    return False
+            except OSError:
+                return False
+        else:
+            return False
+
+    return has_cache_indicator
 
 
 def _is_cache_dir_safe(cache_dir):
@@ -623,22 +701,40 @@ def _is_cache_dir_safe(cache_dir):
     never cause unrelated directories to be deleted via shutil.rmtree().
     """
     try:
-        resolved = os.path.realpath(cache_dir)
+        raw_expanded = os.path.expanduser(cache_dir)
+        raw_abs = os.path.abspath(raw_expanded).rstrip(os.path.sep)
+        resolved = os.path.realpath(cache_dir).rstrip(os.path.sep)
     except (OSError, ValueError):
         return False
 
-    # Block the most dangerous cases — these directories should never be deleted.
-    if resolved in ("/", os.path.sep):
+    # Block root itself.
+    if (
+        not resolved
+        or resolved in ("/", os.path.sep)
+        or not raw_abs
+        or raw_abs in ("/", os.path.sep)
+    ):
         return False
-    if resolved == os.path.expanduser("~"):
+
+    # Block user home directory (raw and resolved).
+    try:
+        home_raw = os.path.abspath(os.path.expanduser("~")).rstrip(os.path.sep)
+        home_resolved = os.path.realpath(os.path.expanduser("~")).rstrip(os.path.sep)
+        if resolved in (home_raw, home_resolved) or raw_abs in (home_raw, home_resolved):
+            return False
+    except (OSError, ValueError):
         return False
-    # Also block /home itself (but not subdirectories like /home/user/src).
-    if resolved == "/home":
+
+    # Block protected system roots (checking both raw and resolved paths to handle
+    # firmlinks and symlinks).
+    if raw_abs in _PROTECTED_ROOTS or resolved in _PROTECTED_ROOTS:
         return False
 
     # Allow the default cache location and any explicitly set absolute path
     # that lives inside it.
-    default_cache = os.path.realpath(os.path.join(os.path.expanduser("~"), ".cache", "taken"))
+    default_cache = os.path.realpath(
+        os.path.join(os.path.expanduser("~"), ".cache", "taken")
+    ).rstrip(os.path.sep)
     if resolved == default_cache or resolved.startswith(default_cache + os.path.sep):
         return True
 
