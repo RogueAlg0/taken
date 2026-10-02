@@ -75,7 +75,7 @@ def build_parser():
         type=int,
         default=20,
         metavar="N",
-        help="max open issues to check per owner/repo scan target (default: 20)",
+        help="max open issues to check per scan target, or max candidates to return in --discover mode (default: 20)",
     )
     parser.add_argument(
         "--label",

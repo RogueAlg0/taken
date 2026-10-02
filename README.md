@@ -65,7 +65,7 @@ Useful flags:
 - `--json`: print the full findings as JSON instead of the human summary
 - `--me LOGIN`: ignore your own comments when scanning for claimants
 - `--file PATH`: read targets from a file, one per line
-- `--limit N`: scan mode checks at most N open issues per repo (default: 20)
+- `--limit N`: scan mode checks at most N open issues per repo; in `--discover` mode, returns at most N candidates (default: 20)
 - `--label LABEL`: scan mode only considers open issues carrying this label
 - `--no-cache`: bypass the API response cache
 - `--clear-cache`: delete the API response cache and exit
