@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- GraphQL subprocess failures with no stderr now report stdout or the exit status instead of an empty diagnostic (#343).
+
 ## [0.7.5] - 2026-10-01
 
 ### Added

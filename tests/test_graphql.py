@@ -235,6 +235,23 @@ def test_graphql_via_gh_missing_binary():
             graphql.graphql_via_gh("query Q { x }", {})
 
 
+@pytest.mark.parametrize(
+    ("stdout", "expected"),
+    [("transport closed", "transport closed"), ("", "exit status 2")],
+)
+def test_graphql_via_gh_failure_without_stderr_has_a_diagnostic(stdout, expected):
+    with mock.patch.object(subprocess, "run", return_value=_run_result(stdout, rc=2)):
+        with pytest.raises(checks.TakenError, match=expected):
+            graphql.graphql_via_gh("query Q { x }", {})
+
+
+def test_graphql_via_gh_failure_prefers_stderr_over_stdout():
+    result = _run_result("less useful stdout", rc=2, stderr="specific stderr")
+    with mock.patch.object(subprocess, "run", return_value=result):
+        with pytest.raises(checks.TakenError, match="specific stderr"):
+            graphql.graphql_via_gh("query Q { x }", {})
+
+
 # --- persistent session (path C) --------------------------------------------
 
 

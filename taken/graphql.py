@@ -249,7 +249,8 @@ def _run_gql_attempt(cmd):
         err = (proc.stderr or "").strip()
         if checks._is_rate_limited(err):
             raise checks.RateLimitError(checks._rate_limit_message("graphql", err))
-        raise checks.TakenError(f"`gh api graphql` failed: {err[:300]}")
+        detail = err or (proc.stdout or "").strip() or f"exit status {proc.returncode}"
+        raise checks.TakenError(f"`gh api graphql` failed: {detail[:300]}")
     return payload
 
 
