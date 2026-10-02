@@ -23,6 +23,7 @@ import os
 import random
 import re
 import subprocess
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -38,6 +39,9 @@ from taken import budget, checks
 # authenticated budget tier may raise them (see taken/budget.py).
 _MAX_COMMENT_PAGES = 5
 _MAX_TIMELINE_PAGES = 5
+_ISSUE_QUERY_LABEL = "issue query"
+_GITHUB_API_HOST = "api.github.com"
+_UTC_SUFFIX = "+00:00"
 _MAX_HISTORY_PAGES = 3
 _MAX_MERGE_PAGES = 2
 # Labels are tiny: 3 pages x 100 covers 300 labels, far beyond any
@@ -201,7 +205,7 @@ def _cached_or_fetch(query, variables, fetcher):
         checks.record_cache_result(False)
     checks.record_api_call("graphql")
     payload = fetcher()
-    _raise_for_errors(payload, "issue query")
+    _raise_for_errors(payload, _ISSUE_QUERY_LABEL)
     data = payload.get("data")
     if not isinstance(data, dict):
         raise checks.TakenError("GitHub GraphQL query returned an unexpected response")
@@ -210,47 +214,52 @@ def _cached_or_fetch(query, variables, fetcher):
     return payload
 
 
-def graphql_via_gh(query, variables):
-    """POST one GraphQL query via the `gh api graphql` subprocess (path B).
-
-    Mirrors checks.gh_api's retry discipline: RATE_LIMITED responses get
-    bounded retries with backoff and jitter.
-    """
+def _build_gql_cmd(query, variables):
+    """Build the `gh api graphql` argv, skipping null variables."""
     cmd = ["gh", "api", "graphql", "-f", f"query={query}"]
     for name, value in (variables or {}).items():
         if value is None:
             continue
         cmd.extend(["-F", f"{name}={value}"])
+    return cmd
 
-    def attempt_once():
-        try:
-            gql_start = time.perf_counter()
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=GRAPHQL_TIMEOUT)
-            checks.record_phase("graphql", time.perf_counter() - gql_start)
-        except FileNotFoundError:
-            raise checks.TakenError("the `gh` CLI is not installed or not on PATH") from None
-        except subprocess.TimeoutExpired:
-            raise checks.TakenError(
-                f"`gh api graphql` timed out after {GRAPHQL_TIMEOUT}s"
-            ) from None
-        checks.record_bytes(len((proc.stdout or "").encode("utf-8")))
-        try:
-            payload = json.loads(proc.stdout or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if isinstance(payload, dict) and payload.get("errors"):
-            _raise_for_errors(payload, "issue query")
-        if proc.returncode != 0:
-            err = (proc.stderr or "").strip()
-            if checks._is_rate_limited(err):
-                raise checks.RateLimitError(checks._rate_limit_message("graphql", err))
-            raise checks.TakenError(f"`gh api graphql` failed: {err[:300]}")
-        return payload
 
+def _run_gql_attempt(cmd):
+    """Run one `gh api graphql` subprocess; return the payload dict.
+
+    Raises TakenError on transport or parse failures, RateLimitError when
+    stderr signals a rate limit.
+    """
+    try:
+        gql_start = time.perf_counter()
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=GRAPHQL_TIMEOUT)
+        checks.record_phase("graphql", time.perf_counter() - gql_start)
+    except FileNotFoundError:
+        raise checks.TakenError("the `gh` CLI is not installed or not on PATH") from None
+    except subprocess.TimeoutExpired:
+        raise checks.TakenError(f"`gh api graphql` timed out after {GRAPHQL_TIMEOUT}s") from None
+    checks.record_bytes(len((proc.stdout or "").encode("utf-8")))
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+    if isinstance(payload, dict) and payload.get("errors"):
+        _raise_for_errors(payload, _ISSUE_QUERY_LABEL)
+    if proc.returncode != 0:
+        err = (proc.stderr or "").strip()
+        if checks._is_rate_limited(err):
+            raise checks.RateLimitError(checks._rate_limit_message("graphql", err))
+        detail = err or (proc.stdout or "").strip() or f"exit status {proc.returncode}"
+        raise checks.TakenError(f"`gh api graphql` failed: {detail[:300]}")
+    return payload
+
+
+def _fetch_with_retries(query, variables, cmd):
+    """Fetch through the cache with bounded rate-limit retries and backoff."""
     attempt = 0
     while True:
         try:
-            return _cached_or_fetch(query, variables, attempt_once)
+            return _cached_or_fetch(query, variables, lambda: _run_gql_attempt(cmd))
         except checks.RateLimitError:
             attempt += 1
             if attempt >= checks.RETRY_ATTEMPTS:
@@ -258,6 +267,15 @@ def graphql_via_gh(query, variables):
             delay = checks.RETRY_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
             checks.record_retry(delay)
             time.sleep(delay)
+
+
+def graphql_via_gh(query, variables):
+    """POST one GraphQL query via the `gh api graphql` subprocess (path B).
+
+    Mirrors checks.gh_api's retry discipline: RATE_LIMITED responses get
+    bounded retries with backoff and jitter.
+    """
+    return _fetch_with_retries(query, variables, _build_gql_cmd(query, variables))
 
 
 def _gh_auth_token():
@@ -310,14 +328,14 @@ class PersistentGraphQLSession:
         the proxy, so keep-alive and per-request auth keep working.
         """
         proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
-        if proxy_url and not urllib.request.proxy_bypass("api.github.com"):
+        if proxy_url and not urllib.request.proxy_bypass(_GITHUB_API_HOST):
             parsed = urllib.parse.urlparse(proxy_url)
             conn = http.client.HTTPSConnection(
                 parsed.hostname, parsed.port or 443, timeout=GRAPHQL_TIMEOUT
             )
-            conn.set_tunnel("api.github.com", 443)
+            conn.set_tunnel(_GITHUB_API_HOST, 443)
             return conn
-        return http.client.HTTPSConnection("api.github.com", timeout=GRAPHQL_TIMEOUT)
+        return http.client.HTTPSConnection(_GITHUB_API_HOST, timeout=GRAPHQL_TIMEOUT)
 
     def post(self, query, variables):
         """POST one GraphQL query, reconnecting once if the tunnel died.
@@ -397,7 +415,7 @@ class PersistentGraphQLSession:
 
     def _checked_post(self, query, variables):
         payload = self.post(query, variables)
-        _raise_for_errors(payload, "issue query")
+        _raise_for_errors(payload, _ISSUE_QUERY_LABEL)
         if not isinstance(payload.get("data"), dict):
             raise checks.TakenError("persistent GraphQL query returned an unexpected response")
         return payload
@@ -415,6 +433,24 @@ def get_session():
     if _SESSION is None:
         _SESSION = PersistentGraphQLSession()
     return _SESSION
+
+
+_thread_state = threading.local()
+
+
+def thread_session():
+    """One persistent GraphQL session per calling thread.
+
+    ``get_session()`` shares a single keep-alive connection, which is not
+    safe to use from pool worker threads; each thread keeps its own
+    session (and its own connection) instead. The token is still read once
+    per thread from ``gh auth token`` and held in memory only.
+    """
+    session = getattr(_thread_state, "graphql_session", None)
+    if session is None:
+        session = PersistentGraphQLSession()
+        _thread_state.graphql_session = session
+    return session
 
 
 # ---------------------------------------------------------------------------
@@ -516,39 +552,64 @@ def _map_ai_policy(repository):
     return {"verdict": "none-found", "snippet": "", "source": None}
 
 
-def _map_repo_health(repository, window_days=checks.HEALTH_WINDOW_DAYS):
+def _pushed_recency(repository, window_days):
+    """Return (pushed_at, pushed_recently) for the repository payload."""
     pushed_at = repository.get("pushedAt") or ""
-    pushed_recently = False
-    if pushed_at:
-        pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
-        pushed_recently = datetime.now(timezone.utc) - pushed_dt <= timedelta(days=window_days)
-    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    if not pushed_at:
+        return pushed_at, False
+    pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", _UTC_SUFFIX))
+    recent = datetime.now(timezone.utc) - pushed_dt <= timedelta(days=window_days)
+    return pushed_at, recent
+
+
+def _count_recent_merges(repository, cutoff):
+    """Count merged PRs merged at or after the cutoff datetime."""
     recent_merges = 0
     for pr in (repository.get("mergedPRs") or {}).get("nodes", []):
         merged_at = pr.get("mergedAt")
         if not merged_at:
             continue
-        merged_dt = datetime.fromisoformat(merged_at.replace("Z", "+00:00"))
+        merged_dt = datetime.fromisoformat(merged_at.replace("Z", _UTC_SUFFIX))
         if merged_dt >= cutoff:
             recent_merges += 1
+    return recent_merges
+
+
+def _commit_author_key(commit):
+    """Dedup key for a commit author: login, else email, else None.
+
+    Bot logins return None so automation never counts as a contributor.
+    """
+    author = commit.get("author") or {}
+    user = author.get("user") or {}
+    login = user.get("login") or ""
+    if login:
+        if login.endswith("[bot]"):
+            return None
+        return login.lower()
+    email = author.get("email") or ""
+    return email.lower() if email else None
+
+
+def _collect_contributors(repository):
+    """Logins/emails of human commit authors on the default branch."""
     authors = set()
     history = ((repository.get("defaultBranchRef") or {}).get("target") or {}).get("history") or {}
     for commit in history.get("nodes", []):
-        author = commit.get("author") or {}
-        user = author.get("user") or {}
-        login = user.get("login") or ""
-        if login:
-            if login.endswith("[bot]"):
-                continue
-            authors.add(login.lower())
-        else:
-            email = author.get("email") or ""
-            if email:
-                authors.add(email.lower())
+        key = _commit_author_key(commit)
+        if key is not None:
+            authors.add(key)
+    return authors
+
+
+def _map_repo_health(repository, window_days=checks.HEALTH_WINDOW_DAYS):
+    pushed_at, pushed_recently = _pushed_recency(repository, window_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    authors = _collect_contributors(repository)
     return {
         "pushed_at": pushed_at[:10],
         "pushed_recently": pushed_recently,
-        "recent_merges": recent_merges,
+        "recent_merges": _count_recent_merges(repository, cutoff),
         "contributors": len(authors),
         "contributors_window_days": checks.CONTRIBUTORS_WINDOW_DAYS,
     }
@@ -574,101 +635,103 @@ def _paginate(connection, fetch_next, variables, after_key, max_pages):
     return nodes, bool(page_info.get("hasNextPage"))
 
 
-def run_checks_graphql(owner, repo, number, me=None, mode="graphql", session=None, thresholds=None):
-    """Run the check suite via GraphQL; return findings like checks.run_checks.
-
-    `thresholds` carries the stale-claim decay settings (issue #83); None
-    means the defaults from checks.default_thresholds()."""
+def _select_fetch(mode, session):
+    """Return the (query, variables) -> payload callable for the mode."""
     if mode == "persistent":
         sess = session or get_session()
-        fetch = lambda q, v: sess.query(q, v)  # noqa: E731
-    else:
-        fetch = lambda q, v: graphql_via_gh(q, v)  # noqa: E731
+        return lambda q, v: sess.query(q, v)
+    return lambda q, v: graphql_via_gh(q, v)
 
-    since = (datetime.now(timezone.utc) - timedelta(days=checks.CONTRIBUTORS_WINDOW_DAYS)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
-    variables: dict[str, Any] = {
-        "owner": owner,
-        "repo": repo,
-        "number": number,
-        "since": since,
-    }
+
+def _fetch_repository(fetch, variables, owner, repo):
+    """Fetch the repository payload; raise NotFoundError when absent."""
     payload = fetch(ISSUE_QUERY, variables)
-    data = payload["data"]
-    repository = data.get("repository")
+    repository = payload["data"].get("repository")
     if repository is None:
         raise checks.NotFoundError(f"not found: repos/{owner}/{repo}")
+    return repository
 
-    issue = _map_issue(repository.get("issue"), number)
 
-    def refetch(new_variables):
-        return fetch(ISSUE_QUERY, new_variables)["data"]["repository"]
+def _refetch(fetch, new_variables):
+    """Re-run the issue query; return the repository payload."""
+    return fetch(ISSUE_QUERY, new_variables)["data"]["repository"]
 
-    # Paginate connections that can exceed the first page (rare).
+
+def _paginate_comments(issue, fetch, variables):
+    """Paginate issue comments; return (nodes, truncated)."""
     comment_nodes = list(issue.pop("_comment_nodes"))
     comment_page = issue.pop("_comment_page")
-    comments_truncated = False
-    if comment_page.get("hasNextPage"):
-        comment_nodes, comments_truncated = _paginate(
-            {"nodes": comment_nodes, "pageInfo": comment_page},
-            lambda v: refetch(v)["issue"]["comments"],
-            variables,
-            "commentsAfter",
-            budget.effective_cap(_MAX_COMMENT_PAGES, "gql_comment_pages"),
-        )
+    if not comment_page.get("hasNextPage"):
+        return comment_nodes, False
+    return _paginate(
+        {"nodes": comment_nodes, "pageInfo": comment_page},
+        lambda v: _refetch(fetch, v)["issue"]["comments"],
+        variables,
+        "commentsAfter",
+        budget.effective_cap(_MAX_COMMENT_PAGES, "gql_comment_pages"),
+    )
 
-    # Labels paginate like comments/timeline: an issue can carry more
-    # labels than one page holds, and a design-level label past the
-    # first page is CAUTION context we must not silently drop.
+
+def _paginate_labels(issue, fetch, variables):
+    """Paginate issue labels in place; return labels_truncated."""
     label_nodes = list(issue.pop("_label_nodes"))
     label_page = issue.pop("_label_page")
-    labels_truncated = False
-    if label_page.get("hasNextPage"):
-        label_nodes, labels_truncated = _paginate(
-            {"nodes": label_nodes, "pageInfo": label_page},
-            lambda v: refetch(v)["issue"]["labels"],
-            variables,
-            "labelsAfter",
-            budget.effective_cap(_MAX_LABEL_PAGES, "gql_label_pages"),
-        )
-        issue["labels"] = [n.get("name") for n in label_nodes]
+    if not label_page.get("hasNextPage"):
+        return False
+    label_nodes, labels_truncated = _paginate(
+        {"nodes": label_nodes, "pageInfo": label_page},
+        lambda v: _refetch(fetch, v)["issue"]["labels"],
+        variables,
+        "labelsAfter",
+        budget.effective_cap(_MAX_LABEL_PAGES, "gql_label_pages"),
+    )
+    issue["labels"] = [n.get("name") for n in label_nodes]
+    return labels_truncated
 
-    issue_node = repository.get("issue") or {}
+
+def _paginate_timeline(issue_node, fetch, variables):
+    """Paginate timeline items; return (nodes, truncated)."""
     timeline_conn = issue_node.get("timelineItems") or {}
     timeline_nodes = list(timeline_conn.get("nodes", []))
-    timeline_truncated = False
-    if (timeline_conn.get("pageInfo") or {}).get("hasNextPage"):
-        timeline_nodes, timeline_truncated = _paginate(
-            timeline_conn,
-            lambda v: refetch(v)["issue"]["timelineItems"],
-            variables,
-            "timelineAfter",
-            budget.effective_cap(_MAX_TIMELINE_PAGES, "gql_timeline_pages"),
-        )
+    if not (timeline_conn.get("pageInfo") or {}).get("hasNextPage"):
+        return timeline_nodes, False
+    return _paginate(
+        timeline_conn,
+        lambda v: _refetch(fetch, v)["issue"]["timelineItems"],
+        variables,
+        "timelineAfter",
+        budget.effective_cap(_MAX_TIMELINE_PAGES, "gql_timeline_pages"),
+    )
 
+
+def _paginate_history(repository, fetch, variables):
+    """Paginate default-branch history; return repository with full history."""
     branch_target = (repository.get("defaultBranchRef") or {}).get("target") or {}
     history = branch_target.get("history") or {}
-    if (history.get("pageInfo") or {}).get("hasNextPage"):
-        history_nodes, _ = _paginate(
-            history,
-            lambda v: (
-                ((refetch(v).get("defaultBranchRef") or {}).get("target") or {}).get("history")
-                or {}
-            ),
-            variables,
-            "historyAfter",
-            budget.effective_cap(_MAX_HISTORY_PAGES, "gql_history_pages"),
-        )
-        history = {**history, "nodes": history_nodes}
-        repository = {
-            **repository,
-            "defaultBranchRef": {
-                **(repository.get("defaultBranchRef") or {}),
-                "target": {**branch_target, "history": history},
-            },
-        }
+    if not (history.get("pageInfo") or {}).get("hasNextPage"):
+        return repository
+    history_nodes, _ = _paginate(
+        history,
+        lambda v: (
+            ((_refetch(fetch, v).get("defaultBranchRef") or {}).get("target") or {}).get("history")
+            or {}
+        ),
+        variables,
+        "historyAfter",
+        budget.effective_cap(_MAX_HISTORY_PAGES, "gql_history_pages"),
+    )
+    history = {**history, "nodes": history_nodes}
+    return {
+        **repository,
+        "defaultBranchRef": {
+            **(repository.get("defaultBranchRef") or {}),
+            "target": {**branch_target, "history": history},
+        },
+    }
 
+
+def _paginate_merged_prs(repository, fetch, variables):
+    """Paginate merged PRs until the health-window cutoff; return repository."""
     merged = repository.get("mergedPRs") or {}
     merged_page = merged.get("pageInfo") or {}
     cutoff = datetime.now(timezone.utc) - timedelta(days=checks.HEALTH_WINDOW_DAYS)
@@ -679,7 +742,7 @@ def run_checks_graphql(owner, repo, number, me=None, mode="graphql", session=Non
         and _oldest_merged_at(merged) >= cutoff
     ):
         variables = {**variables, "prsAfter": merged_page.get("endCursor")}
-        merged = refetch(variables)["mergedPRs"]
+        merged = _refetch(fetch, variables)["mergedPRs"]
         repository = {
             **repository,
             "mergedPRs": {
@@ -691,6 +754,40 @@ def run_checks_graphql(owner, repo, number, me=None, mode="graphql", session=Non
         merged = repository["mergedPRs"]
         merged_page = merged.get("pageInfo") or {}
         pages += 1
+    return repository
+
+
+def run_checks_graphql(owner, repo, number, me=None, mode="graphql", session=None, thresholds=None):
+    """Run the check suite via GraphQL; return findings like checks.run_checks.
+
+    `thresholds` carries the stale-claim decay settings (issue #83); None
+    means the defaults from checks.default_thresholds()."""
+    fetch = _select_fetch(mode, session)
+    since = (datetime.now(timezone.utc) - timedelta(days=checks.CONTRIBUTORS_WINDOW_DAYS)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    variables: dict[str, Any] = {
+        "owner": owner,
+        "repo": repo,
+        "number": number,
+        "since": since,
+    }
+    repository = _fetch_repository(fetch, variables, owner, repo)
+    issue = _map_issue(repository.get("issue"), number)
+
+    # Paginate connections that can exceed the first page (rare).
+    comment_nodes, comments_truncated = _paginate_comments(issue, fetch, variables)
+
+    # Labels paginate like comments/timeline: an issue can carry more
+    # labels than one page holds, and a design-level label past the
+    # first page is CAUTION context we must not silently drop.
+    labels_truncated = _paginate_labels(issue, fetch, variables)
+
+    issue_node = repository.get("issue") or {}
+    timeline_nodes, timeline_truncated = _paginate_timeline(issue_node, fetch, variables)
+
+    repository = _paginate_history(repository, fetch, variables)
+    repository = _paginate_merged_prs(repository, fetch, variables)
 
     return {
         "target": f"{owner}/{repo}#{number}",
@@ -763,6 +860,6 @@ def _oldest_merged_at(merged):
         return datetime.min.replace(tzinfo=timezone.utc)
     last = nodes[-1].get("mergedAt") or ""
     try:
-        return datetime.fromisoformat(last.replace("Z", "+00:00"))
+        return datetime.fromisoformat(last.replace("Z", _UTC_SUFFIX))
     except ValueError:
         return datetime.min.replace(tzinfo=timezone.utc)

@@ -47,12 +47,15 @@ def default_thresholds():
     }
 
 
+_UTC_SUFFIX = "+00:00"
+
+
 def _parse_ts(ts):
     """Parse an ISO-8601 timestamp to an aware datetime; None when unknown."""
     if not ts:
         return None
     try:
-        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(str(ts).replace("Z", _UTC_SUFFIX))
     except ValueError:
         return None
     if dt.tzinfo is None:
@@ -72,7 +75,12 @@ def days_since(ts, now=None):
 def pr_age_label(pr):
     """One-line age label for a linked-PR finding dict."""
     state = pr.get("state")
-    word = "open" if state == "open" else "merged" if pr.get("merged") else state or "PR"
+    if state == "open":
+        word = "open"
+    elif pr.get("merged"):
+        word = "merged"
+    else:
+        word = state or "PR"
     return f"{word} PR #{pr.get('number')}, last activity {age_phrase(pr.get('idle_days'))}"
 
 
@@ -99,8 +107,8 @@ MAX_SCAN_PAGES = 5
 
 # Repo-health scan depths: merged-PR pages and commit pages per repo.
 # Baselines; the authenticated budget tier may raise them.
-_REPO_PULLS_PAGES = 2
-_REPO_COMMITS_PAGES = 3
+_REPO_PULLS_PAGES = 1
+_REPO_COMMITS_PAGES = 1
 
 # Set to False (via --no-cache) to bypass the response cache.
 _CACHE_ENABLED = True
@@ -488,6 +496,9 @@ def _require_list(value, endpoint):
     return value
 
 
+_CACHE_FILE_SUFFIX = ".json"
+
+
 def _cache_dir():
     """Location of the API response cache. Overridable via TAKEN_CACHE_DIR."""
     raw = os.environ.get("TAKEN_CACHE_DIR")
@@ -512,7 +523,7 @@ def _cache_file(key):
     and same-key races resolve to last-writer-wins with a valid file.
     """
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
-    return os.path.join(_cache_dir(), "v2", digest + ".json")
+    return os.path.join(_cache_dir(), "v2", digest + _CACHE_FILE_SUFFIX)
 
 
 def _cache_key(endpoint, params):
@@ -584,7 +595,7 @@ def _sweep_expired():
     try:
         now = time.time()
         for name in os.listdir(os.path.join(_cache_dir(), "v2")):
-            if not name.endswith(".json"):
+            if not name.endswith(_CACHE_FILE_SUFFIX):
                 continue
             path = os.path.join(_cache_dir(), "v2", name)
             try:
@@ -668,7 +679,7 @@ def _looks_like_taken_cache(cache_dir):
                     return False
                 if v2_name == "api_cache.json":
                     return False
-                if v2_name.endswith(".json") or v2_name.startswith(".cache-"):
+                if v2_name.endswith(_CACHE_FILE_SUFFIX) or v2_name.startswith(".cache-"):
                     continue
                 return False
             has_cache_indicator = True
@@ -761,7 +772,7 @@ def clear_cache():
         return -1
     removed = 0
     for _root, _dirs, files in os.walk(cache_dir):
-        removed += sum(1 for name in files if name.endswith(".json"))
+        removed += sum(1 for name in files if name.endswith(_CACHE_FILE_SUFFIX))
     try:
         shutil.rmtree(cache_dir)
     except OSError:
@@ -813,7 +824,9 @@ def _cache_write(key, data):
             os.unlink(_cache_path())
         except OSError:
             pass
-        if random.random() < 0.05:
+        # S2245 false positive: non-crypto use; this only jitters
+        # how often the cache sweeps expired entries.
+        if random.random() < 0.05:  # NOSONAR
             _sweep_expired()
     except OSError:
         pass  # the cache must never break the tool
@@ -860,6 +873,72 @@ def _rate_limit_message(endpoint, err):
     )
 
 
+def _gh_api_attempt(cmd, endpoint):
+    """Run one `gh api` subprocess attempt; return the completed process.
+
+    Raises TakenError when `gh` is missing or the call times out.
+    """
+    try:
+        record_api_call(endpoint)
+        rest_start = time.perf_counter()
+        # S6350 (command argument injection) is a false positive here:
+        # list-form argv with shell=False, endpoint allowlisted after
+        # normalization (see _gh_api_run), so no argument can be read as a
+        # flag. The marker is on both lines because the sink spans them.
+        proc = subprocess.run(  # NOSONAR
+            cmd, capture_output=True, text=True, timeout=API_TIMEOUT
+        )  # NOSONAR
+        record_phase("rest", time.perf_counter() - rest_start)
+        return proc
+    except FileNotFoundError:
+        raise TakenError("the `gh` CLI is not installed or not on PATH") from None
+    except subprocess.TimeoutExpired:
+        raise TakenError(f"`gh api {endpoint}` timed out after {API_TIMEOUT}s") from None
+
+
+def _gh_api_backoff(err, attempt, honor_retry_after):
+    """Sleep with jittered exponential backoff before the next retry.
+
+    Throttled responses honor Retry-After when present; a brief pause rides
+    out secondary limits, which are about request velocity rather than spent
+    budget. Jitter keeps parallel discover workers from retrying in lockstep.
+    """
+    delay = None
+    if honor_retry_after:
+        delay = _retry_after_seconds(err)
+    if delay is None:
+        delay = RETRY_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+    record_retry(delay)
+    time.sleep(delay)
+
+
+def _gh_api_maybe_retry(endpoint, proc, attempt):
+    """Handle a failed attempt: sleep, then return the next attempt count.
+
+    Raises when the failure is terminal. Rate-limit signals are checked
+    first: a throttled response may cite numeric IDs (e.g. installation
+    40412) that must not be misread as HTTP 404 below.
+    """
+    err = (proc.stderr or "").strip()
+    if _is_rate_limited(err):
+        attempt += 1
+        if attempt >= RETRY_ATTEMPTS:
+            raise RateLimitError(_rate_limit_message(endpoint, err))
+        # Throttled: back off with jitter so parallel discover workers
+        # don't retry in lockstep.
+        _gh_api_backoff(err, attempt, honor_retry_after=True)
+        return attempt
+    if _HTTP_404_RE.search(err) or "Not Found" in err:
+        raise NotFoundError(f"not found: {endpoint}")
+    attempt += 1
+    if not _TRANSIENT_5XX_RE.search(err) or attempt >= RETRY_ATTEMPTS:
+        raise TakenError(f"`gh api {endpoint}` failed: {err[:300]}")
+    # Transient 5xx: back off with jitter so parallel discover workers
+    # don't retry in lockstep.
+    _gh_api_backoff(err, attempt, honor_retry_after=False)
+    return attempt
+
+
 def _gh_api_run(cmd, endpoint, paced):
     """Run one `gh api` call through the retry loop; return parsed JSON.
 
@@ -878,44 +957,10 @@ def _gh_api_run(cmd, endpoint, paced):
     while True:
         if paced:
             _wait_search_pace()
-        try:
-            record_api_call(endpoint)
-            rest_start = time.perf_counter()
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=API_TIMEOUT)
-            record_phase("rest", time.perf_counter() - rest_start)
-        except FileNotFoundError:
-            raise TakenError("the `gh` CLI is not installed or not on PATH") from None
-        except subprocess.TimeoutExpired:
-            raise TakenError(f"`gh api {endpoint}` timed out after {API_TIMEOUT}s") from None
+        proc = _gh_api_attempt(cmd, endpoint)
         if proc.returncode == 0:
             break
-        err = (proc.stderr or "").strip()
-        # Rate-limit signals first: a throttled response may cite numeric IDs
-        # (e.g. installation 40412) that must not be misread as HTTP 404 below.
-        if _is_rate_limited(err):
-            attempt += 1
-            if attempt >= RETRY_ATTEMPTS:
-                raise RateLimitError(_rate_limit_message(endpoint, err))
-            # Throttled: back off with jitter so parallel discover workers
-            # don't retry in lockstep. Honor Retry-After when the response
-            # carries one; a brief pause rides out secondary limits, which
-            # are about request velocity rather than spent budget.
-            delay = _retry_after_seconds(err)
-            if delay is None:
-                delay = RETRY_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
-            record_retry(delay)
-            time.sleep(delay)
-            continue
-        if _HTTP_404_RE.search(err) or "Not Found" in err:
-            raise NotFoundError(f"not found: {endpoint}")
-        attempt += 1
-        if not _TRANSIENT_5XX_RE.search(err) or attempt >= RETRY_ATTEMPTS:
-            raise TakenError(f"`gh api {endpoint}` failed: {err[:300]}")
-        # Transient 5xx: back off with jitter so parallel discover workers
-        # don't retry in lockstep.
-        delay = RETRY_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
-        record_retry(delay)
-        time.sleep(delay)
+        attempt = _gh_api_maybe_retry(endpoint, proc, attempt)
     record_bytes(len((proc.stdout or "").encode("utf-8")))
     try:
         data = json.loads(proc.stdout)
@@ -926,6 +971,10 @@ def _gh_api_run(cmd, endpoint, paced):
 
 def gh_api(endpoint, params=None):
     """GET a GitHub API endpoint via `gh api` and return parsed JSON."""
+    # Normalize before validating: the allowlist must see exactly the string
+    # that reaches subprocess. Stripping first also closes the theoretical
+    # "/-" edge where a leading slash could hide a leading dash.
+    endpoint = endpoint.lstrip("/") if isinstance(endpoint, str) else endpoint
     _require_safe_endpoint(endpoint)
     key = _cache_key(endpoint, params)
     if _CACHE_ENABLED:
@@ -936,14 +985,14 @@ def gh_api(endpoint, params=None):
             record_cache_result(True)
             return cached
         record_cache_result(False)
-    cmd = ["gh", "api", "--method", "GET", endpoint.lstrip("/")]
+    cmd = ["gh", "api", "--method", "GET", endpoint]
     # Pin the method explicitly: stock `gh` switches to POST whenever -f
     # parameters are added, which would turn reads into writes (e.g. POST
     # /repos/{o}/{r}/issues reads as "create an issue"). The GraphQL path
     # builds its own command and intentionally keeps the auto-POST.
     for key_param, value in (params or {}).items():
         cmd.extend(["-f", f"{key_param}={value}"])
-    if endpoint.lstrip("/").startswith("search/"):
+    if endpoint.startswith("search/"):
         # Search pacing: hold the lock through the pace wait AND the entire
         # retry loop, so parallel discover workers and retry bursts can never
         # have two search subprocesses in flight at once. Non-search
@@ -1057,47 +1106,155 @@ def check_issue(owner, repo, number, payload=None):
     }
 
 
-def check_timeline(owner, repo, number):
+def _timeline_event_pr(event, seen):
+    """Parse one timeline event into (pr_owner, pr_repo, pr_number), or None.
+
+    Returns None for events that are not linked-PR cross-references, for
+    unparseable PR URLs, and for PRs already seen; new keys are added to
+    `seen` as they are accepted.
+    """
+    if event.get("event") not in ("cross-referenced", "connected"):
+        return None
+    src = (event.get("source") or {}).get("issue") or {}
+    match = PR_URL_RE.match(src.get("html_url") or "")
+    if not match:
+        return None
+    pr_owner, pr_repo, pr_number = match.groups()
+    key = (pr_owner, pr_repo, pr_number)
+    if key in seen:
+        return None
+    seen.add(key)
+    return pr_owner, pr_repo, pr_number
+
+
+def _timeline_pr_info(pr_owner, pr_repo, pr_number):
+    """Fetch a linked PR and build its info dict."""
+    pr = gh_api(f"repos/{pr_owner}/{pr_repo}/pulls/{pr_number}")
+    updated_at = pr.get("updated_at")
+    pr_info = {
+        "number": int(pr_number),
+        "title": pr.get("title"),
+        "state": pr.get("state"),
+        "merged": bool(pr.get("merged_at")),
+        "author": (pr.get("user") or {}).get("login"),
+        "url": pr.get("html_url"),
+        "updated_at": updated_at,
+        "idle_days": days_since(updated_at),
+    }
+    pr_info["age_label"] = pr_age_label(pr_info)
+    return pr_info
+
+
+def _is_taken_decisive(pr_info, pr_idle_days):
+    """True when this linked PR alone decides TAKEN in decide().
+
+    Mirrors decide()'s TAKEN branch exactly, including the fail-closed
+    treatment of unknown idle time.
+    """
+    idle = pr_info["idle_days"]
+    return pr_info["state"] == "open" and not (idle is not None and idle > pr_idle_days)
+
+
+def check_timeline(owner, repo, number, pr_idle_days=None):
     """Find PRs linked to the issue via timeline cross-reference events.
 
     These events never appear in the issue comments, which is the main
     reason this tool exists.
 
-    Returns (linked, truncated): truncated is True when the timeline scan
-    hit the page cap with a full final page, so a linked PR beyond the cap
-    may have been missed.
+    Stops early (issues #166, #217) as soon as a TAKEN-decisive linked PR
+    is found: an open PR whose idle time does not exceed pr_idle_days
+    decides TAKEN on its own in decide(), so fetching further timeline
+    pages or PR details cannot change the verdict. The stop predicate
+    mirrors decide()'s TAKEN branch exactly, including the fail-closed
+    treatment of unknown idle time.
+
+    Returns (linked, truncated): truncated is True when the scan stopped
+    early at the page cap with a full final page OR stopped early on a
+    decisive PR, so a linked PR beyond the scan may have been missed.
+    run_checks reports the truncation and decide() still lets TAKEN win
+    over the CAUTION the truncation adds.
     """
+    if pr_idle_days is None:
+        pr_idle_days = DEFAULT_PR_IDLE_DAYS
     endpoint = f"repos/{owner}/{repo}/issues/{number}/timeline"
-    events, truncated = _paged_list(endpoint)
+    max_pages = budget.effective_cap(MAX_SCAN_PAGES, "scan_pages")
     linked = []
     seen = set()
-    for event in events:
-        if event.get("event") not in ("cross-referenced", "connected"):
-            continue
-        src = (event.get("source") or {}).get("issue") or {}
-        match = PR_URL_RE.match(src.get("html_url") or "")
-        if not match:
-            continue
-        pr_owner, pr_repo, pr_number = match.groups()
-        key = (pr_owner, pr_repo, pr_number)
-        if key in seen:
-            continue
-        seen.add(key)
-        pr = gh_api(f"repos/{pr_owner}/{pr_repo}/pulls/{pr_number}")
-        updated_at = pr.get("updated_at")
-        pr_info = {
-            "number": int(pr_number),
-            "title": pr.get("title"),
-            "state": pr.get("state"),
-            "merged": bool(pr.get("merged_at")),
-            "author": (pr.get("user") or {}).get("login"),
-            "url": pr.get("html_url"),
-            "updated_at": updated_at,
-            "idle_days": days_since(updated_at),
-        }
-        pr_info["age_label"] = pr_age_label(pr_info)
-        linked.append(pr_info)
+    truncated = False
+    for page in range(1, max_pages + 1):
+        batch = _require_list(
+            gh_api(endpoint, {"per_page": "100", "page": str(page)}),
+            endpoint,
+        )
+        for event in batch:
+            parsed = _timeline_event_pr(event, seen)
+            if parsed is None:
+                continue
+            pr_info = _timeline_pr_info(*parsed)
+            linked.append(pr_info)
+            if _is_taken_decisive(pr_info, pr_idle_days):
+                # TAKEN-decisive: decide() reports TAKEN on this PR alone.
+                # Note: truncated=True here is over-conservative when the
+                # decisive PR is the last item of a short final page (the
+                # scan was actually complete), but harmless: TAKEN outranks
+                # the CAUTION that truncation adds in decide().
+                return linked, True
+        if len(batch) < 100:
+            break
+        if page == max_pages:
+            # Full page at the cap: the API may hold more items we did not fetch.
+            truncated = True
     return linked, truncated
+
+
+def _latest_activity_by_author(comments):
+    """Map each comment author (lowercased login) to (timestamp, display name).
+
+    Scans ALL comments: the silence clock resets on any claimant activity,
+    not just claimant-language comments.
+    """
+    latest_activity = {}
+    for comment in comments:
+        author = (comment.get("user") or {}).get("login", "") or ""
+        if not author:
+            continue
+        ts = _parse_ts(comment.get("created_at"))
+        if ts is None:
+            continue
+        key = author.lower()
+        if key not in latest_activity or ts > latest_activity[key][0]:
+            latest_activity[key] = (ts, author)
+    return latest_activity
+
+
+def _claimant_hit(comment, me_lower, now, latest_activity):
+    """Build the hit dict for one comment, or None when it is not a hit."""
+    author = (comment.get("user") or {}).get("login", "")
+    if me_lower and author.lower() == me_lower:
+        return None
+    body = comment.get("body") or ""
+    lowered = body.lower()
+    matched = next((p for p in CLAIMANT_PATTERNS if p in lowered), None)
+    if matched is None:
+        return None
+    snippet = " ".join(body.split())
+    created_at = comment.get("created_at") or ""
+    age_days = days_since(created_at, now)
+    latest = latest_activity.get(author.lower())
+    if latest is None:
+        since_activity = None
+    else:
+        since_activity = max(0, (now - latest[0]).days)
+    return {
+        "author": author,
+        "date": created_at[:10],
+        "pattern": matched,
+        "snippet": snippet[:160],
+        "url": comment.get("html_url"),
+        "age_days": age_days,
+        "days_since_claimant_activity": since_activity,
+        "age_label": f"expressed interest {age_phrase(age_days)}",
+    }
 
 
 def find_claimant_hits(comments, me=None, now=None):
@@ -1113,45 +1270,13 @@ def find_claimant_hits(comments, me=None, now=None):
     now = now or datetime.now(timezone.utc)
     # Latest activity per author across ALL comments: the silence clock
     # resets on any claimant activity, not just claimant-language comments.
-    latest_activity = {}
-    for comment in comments:
-        author = (comment.get("user") or {}).get("login", "") or ""
-        if not author:
-            continue
-        ts = _parse_ts(comment.get("created_at"))
-        if ts is None:
-            continue
-        key = author.lower()
-        if key not in latest_activity or ts > latest_activity[key][0]:
-            latest_activity[key] = (ts, author)
+    latest_activity = _latest_activity_by_author(comments)
     hits = []
     me_lower = (me or "").lower()
     for comment in comments:
-        author = (comment.get("user") or {}).get("login", "")
-        if me_lower and author.lower() == me_lower:
-            continue
-        body = comment.get("body") or ""
-        lowered = body.lower()
-        matched = next((p for p in CLAIMANT_PATTERNS if p in lowered), None)
-        if matched is None:
-            continue
-        snippet = " ".join(body.split())
-        created_at = comment.get("created_at") or ""
-        age_days = days_since(created_at, now)
-        latest = latest_activity.get(author.lower())
-        since_activity = max(0, (now - latest[0]).days) if latest else None
-        hits.append(
-            {
-                "author": author,
-                "date": created_at[:10],
-                "pattern": matched,
-                "snippet": snippet[:160],
-                "url": comment.get("html_url"),
-                "age_days": age_days,
-                "days_since_claimant_activity": since_activity,
-                "age_label": f"expressed interest {age_phrase(age_days)}",
-            }
-        )
+        hit = _claimant_hit(comment, me_lower, now, latest_activity)
+        if hit is not None:
+            hits.append(hit)
     return hits
 
 
@@ -1169,11 +1294,62 @@ def fetch_comments(owner, repo, number):
 def check_claimants(owner, repo, number, me=None):
     """Fetch issue comments and scan them for claimant language.
 
-    Returns (hits, truncated): truncated is True when the comment scan hit
-    the page cap, so a claimant comment beyond the cap may have been missed.
+    Returns (hits, comments, truncated): truncated is True when the comment
+    scan hit the page cap, so a claimant comment beyond the cap may have
+    been missed. Callers that only need hits ignore the middle element.
     """
     comments, truncated = fetch_comments(owner, repo, number)
-    return find_claimant_hits(comments, me=me), truncated
+    hits = find_claimant_hits(comments, me=me)
+    return hits, comments, truncated
+
+
+class RepoMemo:
+    """Per-run memo for repo-level fetches (ai_policy, repo_health).
+
+    discover() creates one per run; candidates from the same repo share a
+    single fetch even with --no-cache or a cold cache. Thread-safe: only
+    fetches for the SAME key serialize (via a per-key in-flight event),
+    so different repos still fetch in parallel and the memo never narrows
+    the run's concurrency. Findings are identical to the unmemoized path
+    because the underlying data cannot change within a run.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._data = {}
+        self._inflight = {}
+
+    def get(self, key, fn):
+        """Return the memoized value for key, computing it once via fn()."""
+        while True:
+            with self._lock:
+                if key in self._data:
+                    return self._data[key]
+                ev = self._inflight.get(key)
+                if ev is None:
+                    ev = threading.Event()
+                    self._inflight[key] = ev
+                    owner = True
+                else:
+                    owner = False
+            if not owner:
+                # Another thread is fetching this key; wait, then re-check.
+                # A failed fetch clears the in-flight marker, so a waiter
+                # whose fetch failed retries as the owner.
+                ev.wait()
+                continue
+            try:
+                val = fn()
+            except Exception:
+                with self._lock:
+                    del self._inflight[key]
+                    ev.set()
+                raise
+            with self._lock:
+                self._data[key] = val
+                del self._inflight[key]
+                ev.set()
+            return val
 
 
 def _first_line_with(text, phrase):
@@ -1248,6 +1424,23 @@ def list_open_issues(owner, repo, limit=20, label=None):
     return found
 
 
+def _commit_author_key(commit):
+    """Normalized author key for one commit dict, or None when unusable.
+
+    Bots are excluded. Prefers the GitHub login; falls back to the commit
+    email when the commit has no linked GitHub user.
+    """
+    login = (commit.get("author") or {}).get("login") or ""
+    if login:
+        if login.endswith("[bot]"):
+            return None
+        return login.lower()
+    email = ((commit.get("commit") or {}).get("author") or {}).get("email") or ""
+    if email:
+        return email.lower()
+    return None
+
+
 def count_recent_contributors(owner, repo, days=CONTRIBUTORS_WINDOW_DAYS):
     """Count distinct people who landed commits in the last `days` days.
 
@@ -1268,16 +1461,9 @@ def count_recent_contributors(owner, repo, days=CONTRIBUTORS_WINDOW_DAYS):
         if not commits:
             break
         for commit in commits:
-            author = commit.get("author") or {}
-            login = author.get("login") or ""
-            if login:
-                if login.endswith("[bot]"):
-                    continue
-                authors.add(login.lower())
-            else:
-                email = ((commit.get("commit") or {}).get("author") or {}).get("email") or ""
-                if email:
-                    authors.add(email.lower())
+            key = _commit_author_key(commit)
+            if key is not None:
+                authors.add(key)
         if len(commits) < 100:
             break
     return len(authors)
@@ -1290,7 +1476,7 @@ def _repo_push_info(owner, repo, window_days=HEALTH_WINDOW_DAYS):
     pushed_at = data.get("pushed_at") or ""
     pushed_recently = False
     if pushed_at:
-        pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
+        pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", _UTC_SUFFIX))
         pushed_recently = datetime.now(timezone.utc) - pushed_dt <= timedelta(days=window_days)
     return pushed_at, pushed_recently
 
@@ -1323,7 +1509,7 @@ def _repo_recent_merges(owner, repo, cutoff, pulls_pages):
             merged_at = pr.get("merged_at")
             if not merged_at:
                 continue
-            merged_dt = datetime.fromisoformat(merged_at.replace("Z", "+00:00"))
+            merged_dt = datetime.fromisoformat(merged_at.replace("Z", _UTC_SUFFIX))
             if merged_dt >= cutoff:
                 recent_merges += 1
         if len(prs) < 50:
@@ -1363,7 +1549,16 @@ def check_repo_health(owner, repo, window_days=HEALTH_WINDOW_DAYS):
     }
 
 
-def run_checks(owner, repo, number, me=None, payload=None, thresholds=None):
+def run_checks(
+    owner,
+    repo,
+    number,
+    me=None,
+    payload=None,
+    thresholds=None,
+    include_comments=False,
+    repo_memo=None,
+):
     """Run the full read-only check suite on one issue; return findings.
 
     `payload` is an optional pre-fetched search/issues item: when it
@@ -1375,6 +1570,16 @@ def run_checks(owner, repo, number, me=None, payload=None, thresholds=None):
     None means the defaults from default_thresholds(). decide() reads
     them from the findings, so the early-stop checks below apply the
     same weakening rules as the final verdict.
+
+    `include_comments`: when True, return (findings, comments, truncated)
+    where comments are the raw issue comments fetched by the claimant
+    scan (None when the scan never ran because decide() stopped early).
+    Lets callers score maintainer engagement without re-fetching.
+
+    `repo_memo`: an optional checks.RepoMemo. Repo-level stages
+    (ai_policy, repo_health) are fetched once per repo per run instead of
+    once per candidate, which matters on a cold cache or --no-cache where
+    the response cache cannot absorb the duplicates.
 
     Fetches run cheapest-decisive-first and stop early as soon as decide()
     reports TAKEN: the issue call alone settles closed and assigned issues,
@@ -1433,35 +1638,62 @@ def run_checks(owner, repo, number, me=None, payload=None, thresholds=None):
         "stages_skipped": ["timeline", "claimants", "ai_policy", "repo_health"],
     }
     if decide(findings)[0] == TAKEN:
-        return findings
-    linked_prs, timeline_truncated = check_timeline(owner, repo, number)
+        return _finish(findings, include_comments)
+    linked_prs, timeline_truncated = check_timeline(
+        owner,
+        repo,
+        number,
+        pr_idle_days=findings["thresholds"].get("pr_idle_days", DEFAULT_PR_IDLE_DAYS),
+    )
     findings["linked_prs"] = linked_prs
     findings["scan_truncated"]["timeline"] = timeline_truncated
     findings["stages_skipped"] = ["claimants", "ai_policy", "repo_health"]
     if decide(findings)[0] == TAKEN:
-        return findings
+        return _finish(findings, include_comments)
+
     # The tail stages are provably independent: no decide() runs between
     # them, so they can only append CAUTION reasons, never overturn a
     # verdict. Authenticated callers run them concurrently (issue #213);
     # the anonymous tier keeps the exact sequential behavior. Futures are
     # consumed in submission order, so the first error surfaces exactly
     # as it did sequentially.
+    #
+    # Repo-level stages go through the per-run memo when one is supplied:
+    # one fetch per repo instead of one per candidate.
+    def _get_policy():
+        if repo_memo is None:
+            return check_ai_policy(owner, repo)
+        return repo_memo.get(("ai_policy", owner, repo), lambda: check_ai_policy(owner, repo))
+
+    def _get_health():
+        if repo_memo is None:
+            return check_repo_health(owner, repo)
+        return repo_memo.get(("repo_health", owner, repo), lambda: check_repo_health(owner, repo))
+
+    claim_comments = None
     workers = min(3, budget.current().batch_workers)
     if workers > 1:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
             claimants_future = pool.submit(check_claimants, owner, repo, number, me=me)
-            policy_future = pool.submit(check_ai_policy, owner, repo)
-            health_future = pool.submit(check_repo_health, owner, repo)
-            claimants, comments_truncated = claimants_future.result()
+            policy_future = pool.submit(_get_policy)
+            health_future = pool.submit(_get_health)
+            claimants, claim_comments, comments_truncated = claimants_future.result()
             ai_policy = policy_future.result()
             repo_health = health_future.result()
     else:
-        claimants, comments_truncated = check_claimants(owner, repo, number, me=me)
-        ai_policy = check_ai_policy(owner, repo)
-        repo_health = check_repo_health(owner, repo)
+        claimants, claim_comments, comments_truncated = check_claimants(owner, repo, number, me=me)
+        ai_policy = _get_policy()
+        repo_health = _get_health()
     findings["claimants"] = claimants
     findings["scan_truncated"]["comments"] = comments_truncated
     findings["ai_policy"] = ai_policy
     findings["repo_health"] = repo_health
     findings["stages_skipped"] = []
+    return _finish(findings, include_comments, claim_comments, comments_truncated)
+
+
+def _finish(findings, include_comments, comments=None, truncated=False):
+    """Shape run_checks()' return for the include_comments flag."""
+    if include_comments:
+        return findings, comments, truncated
     return findings

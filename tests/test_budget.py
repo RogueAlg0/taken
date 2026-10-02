@@ -72,8 +72,8 @@ def test_anonymous_caps_match_todays_behavior():
     b = budget.current()
     assert b.hourly_requests == 60
     assert b.scan_pages == 5
-    assert b.repo_pulls_pages == 2
-    assert b.repo_commits_pages == 3
+    assert b.repo_pulls_pages == 1
+    assert b.repo_commits_pages == 1
     assert b.gql_comment_pages == 5
     assert b.gql_timeline_pages == 5
     assert b.gql_history_pages == 3
@@ -160,7 +160,7 @@ def test_repo_health_pulls_pages_follow_tier(monkeypatch):
     monkeypatch.setattr(checks, "gh_api", fake_gh_api)
     budget.activate(identity=None)
     checks.check_repo_health("o", "r")
-    assert pulls_calls == ["1", "2"]
+    assert pulls_calls == ["1"]
     budget.reset()
     pulls_calls.clear()
     budget.activate(identity="someone")

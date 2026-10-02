@@ -14,7 +14,7 @@ import pytest
 SHIM_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "docs", "console", "py"))
 
 
-@pytest.fixture()
+@pytest.fixture
 def webshim():
     import importlib.util
 

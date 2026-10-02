@@ -97,7 +97,7 @@ def old_run_checks(owner, repo, number, me=None):
     """The pre-#125 fixed fetch order, for verdict-parity tests."""
     issue = checks.check_issue(owner, repo, number)
     linked_prs, timeline_truncated = checks.check_timeline(owner, repo, number)
-    claimants, comments_truncated = checks.check_claimants(owner, repo, number, me=me)
+    claimants, _, comments_truncated = checks.check_claimants(owner, repo, number, me=me)
     return {
         "target": f"{owner}/{repo}#{number}",
         "issue": issue,

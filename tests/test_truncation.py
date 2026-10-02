@@ -94,7 +94,7 @@ def test_five_full_timeline_pages_flag_truncation(monkeypatch):
 
 def test_five_full_comment_pages_flag_truncation(monkeypatch):
     pages_seen = _quiet_run_checks_fake(monkeypatch, comment_pages=5)
-    hits, truncated = checks.check_claimants("o", "r", 1)
+    hits, _, truncated = checks.check_claimants("o", "r", 1)
     assert hits == []
     assert truncated is True
     assert pages_seen["comments"] == 5
@@ -103,7 +103,7 @@ def test_five_full_comment_pages_flag_truncation(monkeypatch):
 def test_short_page_is_not_truncation(monkeypatch):
     _quiet_run_checks_fake(monkeypatch, timeline_pages=2, comment_pages=1)
     _, timeline_truncated = checks.check_timeline("o", "r", 1)
-    _, comments_truncated = checks.check_claimants("o", "r", 1)
+    _, _, comments_truncated = checks.check_claimants("o", "r", 1)
     assert timeline_truncated is False
     assert comments_truncated is False
 
@@ -114,7 +114,7 @@ def test_truncated_timeline_downgrades_go_to_caution(monkeypatch):
     assert findings["scan_truncated"] == {"timeline": True, "comments": False, "labels": False}
     verdict, reasons = decide(findings)
     assert verdict == CAUTION
-    assert any("timeline scan hit the page cap" in r for r in reasons)
+    assert any("timeline scan stopped early" in r for r in reasons)
 
 
 def test_truncated_comments_downgrade_go_to_caution(monkeypatch):
@@ -144,7 +144,7 @@ def test_decide_truncation_flag_causes_caution():
     findings = _go_findings(scan_truncated={"timeline": True, "comments": False})
     verdict, reasons = decide(findings)
     assert verdict == CAUTION
-    assert any("timeline scan hit the page cap" in r for r in reasons)
+    assert any("timeline scan stopped early" in r for r in reasons)
 
 
 def test_graphql_paginate_flags_truncation():
@@ -223,7 +223,7 @@ def test_graphql_findings_flag_truncated_timeline(monkeypatch):
     assert findings["scan_truncated"] == {"timeline": True, "comments": False, "labels": False}
     verdict, reasons = decide(findings)
     assert verdict == CAUTION
-    assert any("timeline scan hit the page cap" in r for r in reasons)
+    assert any("timeline scan stopped early" in r for r in reasons)
 
 
 def test_ten_full_timeline_pages_flag_truncation_when_authenticated(monkeypatch):
@@ -240,7 +240,7 @@ def test_ten_full_comment_pages_flag_truncation_when_authenticated(monkeypatch):
     """In authenticated tier (cap=10), 10 full comment pages flag truncation."""
     budget.activate(identity="someone")
     pages_seen = _quiet_run_checks_fake(monkeypatch, comment_pages=10)
-    hits, truncated = checks.check_claimants("o", "r", 1)
+    hits, _, truncated = checks.check_claimants("o", "r", 1)
     assert hits == []
     assert truncated is True
     assert pages_seen["comments"] == 10

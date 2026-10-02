@@ -111,7 +111,7 @@ def test_tail_stages_run_concurrently(monkeypatch):
 
     def fake_claimants(*a, **k):
         gate("claimants")
-        return [], False
+        return ([], [], False)
 
     def fake_policy(*a, **k):
         gate("policy")
@@ -158,7 +158,7 @@ def test_anonymous_tail_never_leaves_main_thread(monkeypatch):
 
     def fake_claimants(*a, **k):
         seen.append(threading.get_ident())
-        return [], False
+        return ([], [], False)
 
     def fake_policy(*a, **k):
         seen.append(threading.get_ident())

@@ -194,7 +194,8 @@ def test_search_calls_are_paced(monkeypatch):
     checks.gh_api("search/issues", {"q": "x"})
     checks.gh_api("search/issues", {"q": "x"})
     assert len(calls) == 2
-    assert len(sleeps) == 1 and sleeps[0] > 0
+    assert len(sleeps) == 1
+    assert sleeps[0] > 0
 
 
 def test_search_retry_attempts_are_paced(monkeypatch):
@@ -275,7 +276,8 @@ def test_search_subprocesses_never_overlap(monkeypatch):
         release.set()
     t1.join(timeout=10)
     t2.join(timeout=10)
-    assert not t1.is_alive() and not t2.is_alive()
+    assert not t1.is_alive()
+    assert not t2.is_alive()
     # Belt and braces: the recorded execution intervals are disjoint.
     with intervals_lock:
         (s1, e1), (s2, e2) = sorted(intervals)

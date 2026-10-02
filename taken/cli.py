@@ -2,6 +2,7 @@
 
 import argparse
 import concurrent.futures
+import functools
 import json
 import re
 import sys
@@ -19,7 +20,7 @@ REPO_RE = re.compile(r"^([^/\s#]+)/([^/\s#]+)$")
 
 
 def parse_target(text):
-    """Parse a target into ("issue", owner, repo, number) or ("repo", owner, repo).
+    """Parse a target into ("issue", owner, repo, number) or ("repo", owner, repo, None).
 
     Accepts owner/repo#123, GitHub issue URLs, or a bare owner/repo
     (scan mode: check the repo's open issues automatically).
@@ -33,7 +34,7 @@ def parse_target(text):
     match = REPO_RE.match(text)
     if match:
         owner, repo = match.groups()
-        return ("repo", owner, repo)
+        return ("repo", owner, repo, None)
     return None
 
 
@@ -239,6 +240,70 @@ def build_parser():
     return parser
 
 
+def _pr_status(pr):
+    """One-word status for a linked PR dict."""
+    if pr["state"] == "open":
+        return "open"
+    if pr["merged"]:
+        return "merged"
+    return "closed"
+
+
+def _human_linked_prs(findings, skipped, not_checked):
+    lines = []
+    if "timeline" in skipped:
+        lines.append(f"  linked PRs: {not_checked}")
+    elif findings["linked_prs"]:
+        for pr in findings["linked_prs"]:
+            lines.append(f'  linked PR: #{pr["number"]} "{pr["title"]}" ({_pr_status(pr)})')
+            lines.append(f"             {pr['url']}")
+    else:
+        lines.append("  linked PRs: none found in timeline")
+    return lines
+
+
+def _human_assignees(issue):
+    if issue["assignees"]:
+        return [f"  assignees: {', '.join(issue['assignees'])}"]
+    return ["  assignees: none"]
+
+
+def _human_claimants(findings, skipped, not_checked):
+    lines = []
+    if "claimants" in skipped:
+        lines.append(f"  claimants: {not_checked}")
+    elif findings["claimants"]:
+        for hit in findings["claimants"]:
+            lines.append(
+                f'  claimant: {hit["author"]} on {hit["date"]} (matched "{hit["pattern"]}")'
+            )
+            lines.append(f'            "{hit["snippet"]}"')
+    else:
+        lines.append("  claimants: none found in comments")
+    return lines
+
+
+def _human_ai_policy(policy, skipped, not_checked):
+    if "ai_policy" in skipped:
+        return [f"  AI policy: {not_checked}"]
+    if policy["source"]:
+        lines = [f"  AI policy: {policy['verdict']} ({policy['source']})"]
+        if policy["snippet"]:
+            lines.append(f'             "{policy["snippet"]}"')
+        return lines
+    return ["  AI policy: none found (no CONTRIBUTING file)"]
+
+
+def _human_repo_health(health, skipped, not_checked):
+    if "repo_health" in skipped:
+        return [f"  repo health: {not_checked}"]
+    return [
+        f"  repo health: pushed {health['pushed_at'] or 'unknown'}, "
+        f"{health['recent_merges']} PRs merged in last 30 days, "
+        f"{health['contributors']} contributors in last 90 days",
+    ]
+
+
 def format_human(findings, verdict, reasons):
     issue = findings["issue"]
     health = findings["repo_health"]
@@ -262,50 +327,11 @@ def format_human(findings, verdict, reasons):
         f'  issue: {issue["state"]}, "{issue["title"]}"',
         f"         {issue['url']} ({issue['comment_count']} comments)",
     ]
-    if "timeline" in skipped:
-        lines.append(f"  linked PRs: {not_checked}")
-    elif findings["linked_prs"]:
-        for pr in findings["linked_prs"]:
-            if pr["state"] == "open":
-                status = "open"
-            elif pr["merged"]:
-                status = "merged"
-            else:
-                status = "closed"
-            lines.append(f'  linked PR: #{pr["number"]} "{pr["title"]}" ({status})')
-            lines.append(f"             {pr['url']}")
-    else:
-        lines.append("  linked PRs: none found in timeline")
-    if issue["assignees"]:
-        lines.append(f"  assignees: {', '.join(issue['assignees'])}")
-    else:
-        lines.append("  assignees: none")
-    if "claimants" in skipped:
-        lines.append(f"  claimants: {not_checked}")
-    elif findings["claimants"]:
-        for hit in findings["claimants"]:
-            lines.append(
-                f'  claimant: {hit["author"]} on {hit["date"]} (matched "{hit["pattern"]}")'
-            )
-            lines.append(f'            "{hit["snippet"]}"')
-    else:
-        lines.append("  claimants: none found in comments")
-    if "ai_policy" in skipped:
-        lines.append(f"  AI policy: {not_checked}")
-    elif policy["source"]:
-        lines.append(f"  AI policy: {policy['verdict']} ({policy['source']})")
-        if policy["snippet"]:
-            lines.append(f'             "{policy["snippet"]}"')
-    else:
-        lines.append("  AI policy: none found (no CONTRIBUTING file)")
-    if "repo_health" in skipped:
-        lines.append(f"  repo health: {not_checked}")
-    else:
-        lines.append(
-            f"  repo health: pushed {health['pushed_at'] or 'unknown'}, "
-            f"{health['recent_merges']} PRs merged in last 30 days, "
-            f"{health['contributors']} contributors in last 90 days"
-        )
+    lines += _human_linked_prs(findings, skipped, not_checked)
+    lines += _human_assignees(issue)
+    lines += _human_claimants(findings, skipped, not_checked)
+    lines += _human_ai_policy(policy, skipped, not_checked)
+    lines += _human_repo_health(health, skipped, not_checked)
     friendly = checks.friendly_labels(findings)
     if friendly:
         lines.append(f"  first-time friendly: {', '.join(friendly)}")
@@ -319,44 +345,51 @@ def format_human(findings, verdict, reasons):
     return "\n".join(lines)
 
 
-def main(argv=None):
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    if args.clear_cache:
-        return run_clear_cache()
-    if args.no_cache:
-        checks._CACHE_ENABLED = False
-    targets = list(args.targets)
+def _read_targets_file(args, targets):
+    """Append --file targets to targets.
+
+    Returns an exit code when the file cannot be read, else None.
+    """
+    if not args.file:
+        return None
+    try:
+        # S8707 false positive: --file is the invoker's own explicit path;
+        # the caller and the file owner are the same party, so no traversal
+        # boundary is crossed.
+        with open(args.file, encoding="utf-8") as fh:  # NOSONAR
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    targets.append(line)
+    except OSError as exc:
+        print(f"error: cannot read {args.file}: {exc}", file=sys.stderr)
+        return 3
+    return None
+
+
+def _run_discover_command(parser, args):
+    if args.targets or args.file:
+        parser.error("--discover takes no targets")
+    return _run_with_stats(run_discover, args, verbose=args.verbose, debug=args.debug)
+
+
+def _run_health_command(parser, args, targets):
     if args.file:
-        try:
-            with open(args.file, encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        targets.append(line)
-        except OSError as exc:
-            print(f"error: cannot read {args.file}: {exc}", file=sys.stderr)
-            return 3
-    if args.discover:
-        if args.targets or args.file:
-            parser.error("--discover takes no targets")
-        return _run_with_stats(run_discover, args, verbose=args.verbose, debug=args.debug)
-    if args.health:
-        if args.file:
-            parser.error("--health takes a single owner/repo target, not --file")
-        if len(targets) != 1:
-            parser.error("--health takes exactly one owner/repo target")
-        parsed = parse_target(targets[0])
-        if not parsed or parsed[0] != "repo":
-            print(
-                f"error: --health needs an owner/repo target, got {targets[0]!r}",
-                file=sys.stderr,
-            )
-            return 3
-        _, owner, repo = parsed
-        return _run_with_stats(
-            run_health, owner, repo, args, verbose=args.verbose, debug=args.debug
+        parser.error("--health takes a single owner/repo target, not --file")
+    if len(targets) != 1:
+        parser.error("--health takes exactly one owner/repo target")
+    parsed = parse_target(targets[0])
+    if not parsed or parsed[0] != "repo":
+        print(
+            f"error: --health needs an owner/repo target, got {targets[0]!r}",
+            file=sys.stderr,
         )
+        return 3
+    _, owner, repo, _number = parsed
+    return _run_with_stats(run_health, owner, repo, args, verbose=args.verbose, debug=args.debug)
+
+
+def _run_target_command(parser, args, targets):
     if not targets:
         parser.error("need at least one target, --file, or --discover")
     if len(targets) == 1:
@@ -367,6 +400,24 @@ def main(argv=None):
             return _parse_error(targets[0])
         return _run_with_stats(run_single, targets[0], args, verbose=args.verbose, debug=args.debug)
     return _run_with_stats(run_batch, targets, args, verbose=args.verbose, debug=args.debug)
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.clear_cache:
+        return run_clear_cache()
+    if args.no_cache:
+        checks._CACHE_ENABLED = False
+    targets = list(args.targets)
+    file_error = _read_targets_file(args, targets)
+    if file_error is not None:
+        return file_error
+    if args.discover:
+        return _run_discover_command(parser, args)
+    if args.health:
+        return _run_health_command(parser, args, targets)
+    return _run_target_command(parser, args, targets)
 
 
 def _run_with_stats(func, *fargs, verbose=False, debug=False):
@@ -403,81 +454,83 @@ def format_discover_line(result):
     return f"{result['score']:3}  {result['target']}  {why}{markers}"
 
 
-def run_discover(args):
-    """Search, verify, and rank the top candidates."""
-    if args.jobs < 1:
-        print("error: --jobs must be at least 1", file=sys.stderr)
-        return 3
-    show_progress = not args.no_progress and sys.stderr.isatty()
-    bar = None
-    if show_progress:
-        from tqdm import tqdm
+def _make_progress_bar(args):
+    """A tqdm progress bar for candidate verification, or None."""
+    if args.no_progress or not sys.stderr.isatty():
+        return None
+    from tqdm import tqdm
 
-        bar = tqdm(
-            total=0,
-            desc="verifying candidates",
-            unit="issue",
-            file=sys.stderr,
-            bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}",
-        )
+    return tqdm(
+        total=0,
+        desc="verifying candidates",
+        unit="issue",
+        file=sys.stderr,
+        bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}",
+    )
 
-    def on_progress(done, total):
-        if bar is not None:
-            bar.total = total
-            bar.n = done
-            bar.refresh()
 
-    def on_searched(searched):
-        detail = ", ".join(f"{lab} ({count})" for lab, count in searched)
-        print(f"searched: {detail}", file=sys.stderr)
+def _update_progress_bar(bar, done, total):
+    bar.total = total
+    bar.n = done
+    bar.refresh()
 
-    try:
-        options = discover.DiscoverOptions(
-            limit=args.limit,
-            language=args.language,
-            label=args.label,
-            min_contributors=args.min_contributors,
-            me=args.me,
-            jobs=args.jobs,
-            on_progress=on_progress if bar is not None else None,
-            on_searched=on_searched,
-            mode=graphql.fetch_mode(args),
-            thresholds=_thresholds_from_args(args),
-            allocation=args.allocation,
-            explore_floor=args.explore_floor,
-        )
-        results = discover.discover(options)
-    except checks.TakenError as exc:
-        if bar is not None:
-            bar.close()
-        print(f"error: {exc}", file=sys.stderr)
-        return 3
+
+def _log_searched(searched):
+    detail = ", ".join(f"{lab} ({count})" for lab, count in searched)
+    print(f"searched: {detail}", file=sys.stderr)
+
+
+def _discover_options(args, bar):
+    return discover.DiscoverOptions(
+        limit=args.limit,
+        language=args.language,
+        label=args.label,
+        min_contributors=args.min_contributors,
+        me=args.me,
+        jobs=args.jobs,
+        on_progress=functools.partial(_update_progress_bar, bar) if bar is not None else None,
+        on_searched=_log_searched,
+        mode=graphql.fetch_mode(args),
+        thresholds=_thresholds_from_args(args),
+        allocation=args.allocation,
+        explore_floor=args.explore_floor,
+    )
+
+
+def _warn_search_errors(results):
     for label, error in results.search_errors:
-        print(f'warning: partial results: search failed for "{label}": {error}', file=sys.stderr)
-    if bar is not None:
-        bar.close()
-    if not results:
-        errors = getattr(results, "errors", 0)
-        total = getattr(results, "total", 0)
-        if errors and errors == total:
-            # Every candidate errored: the tool is broken, not the data.
-            # Exit 3 (hard failure) so scripts and agents do not mistake
-            # this for a healthy empty result.
-            print(
-                f"no candidates passed verification: all {total} errored "
-                "(check `gh auth status` and your network connection)",
-                file=sys.stderr,
-            )
-            return 3
-        elif errors:
-            print(
-                f"no candidates passed verification "
-                f"({errors} of {total} candidates failed with errors)",
-                file=sys.stderr,
-            )
-        else:
-            print("no candidates passed verification", file=sys.stderr)
-        return 0
+        print(
+            f'warning: partial results: search failed for "{label}": {error}',
+            file=sys.stderr,
+        )
+
+
+def _report_no_candidates(results):
+    """Explain an empty candidate list; exit 3 when everything errored."""
+    errors = getattr(results, "errors", 0)
+    total = getattr(results, "total", 0)
+    if errors and errors == total:
+        # Every candidate errored: the tool is broken, not the data.
+        # Exit 3 (hard failure) so scripts and agents do not mistake
+        # this for a healthy empty result.
+        print(
+            f"no candidates passed verification: all {total} errored "
+            "(check `gh auth status` and your network connection)",
+            file=sys.stderr,
+        )
+        return 3
+    if errors:
+        print(
+            f"no candidates passed verification "
+            f"({errors} of {total} candidates failed with errors)",
+            file=sys.stderr,
+        )
+    else:
+        print("no candidates passed verification", file=sys.stderr)
+    return 0
+
+
+def _print_discover_results(results, args):
     if args.json:
         budget = checks.budget_report()
         print(
@@ -502,6 +555,27 @@ def run_discover(args):
     else:
         for r in results:
             print(format_discover_line(r))
+
+
+def run_discover(args):
+    """Search, verify, and rank the top candidates."""
+    if args.jobs < 1:
+        print("error: --jobs must be at least 1", file=sys.stderr)
+        return 3
+    bar = _make_progress_bar(args)
+    try:
+        results = discover.discover(_discover_options(args, bar))
+    except checks.TakenError as exc:
+        if bar is not None:
+            bar.close()
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    _warn_search_errors(results)
+    if bar is not None:
+        bar.close()
+    if not results:
+        return _report_no_candidates(results)
+    _print_discover_results(results, args)
     return 0
 
 
@@ -522,7 +596,7 @@ def _thresholds_from_args(args):
     }
 
 
-def check_one(owner, repo, number, me, mode="rest", payload=None, thresholds=None):
+def check_one(owner, repo, number, me, mode="rest", payload=None, thresholds=None, session=None):
     """Run the full check on one issue. Returns (target, verdict, reasons, findings).
 
     GraphQL-family modes fall back to REST per issue when the GraphQL
@@ -535,9 +609,25 @@ def check_one(owner, repo, number, me, mode="rest", payload=None, thresholds=Non
 
     `thresholds` carries the stale-claim decay settings (issue #83);
     None means the defaults.
+
+    `session` is an optional persistent GraphQL session. In persistent
+    mode with no session given, each calling thread gets its own session
+    via graphql.thread_session(); the process-wide singleton is never
+    shared across pool worker threads (issue #317).
     """
+    if mode == "persistent" and session is None:
+        # Runs on the worker thread, so thread-local storage hands this
+        # thread its own session instead of the shared singleton.
+        session = graphql.thread_session()
     findings = graphql.run_checks_with_fallback(
-        owner, repo, number, me=me, mode=mode, payload=payload, thresholds=thresholds
+        owner,
+        repo,
+        number,
+        me=me,
+        mode=mode,
+        payload=payload,
+        thresholds=thresholds,
+        session=session,
     )
     verdict, reasons = decide(findings)
     return f"{owner}/{repo}#{number}", verdict, reasons, findings
@@ -629,27 +719,34 @@ def format_batch_line(target, verdict, reasons):
     return f"{verdict:7} {target}  {first}"
 
 
-def run_batch(targets, args):
-    """Check many targets; print one verdict line each.
+def _expand_repo_target(text, owner, repo, args, jobs):
+    """List a repo's open issues into jobs. Returns True when it failed."""
+    try:
+        issues = checks.list_open_issues(owner, repo, limit=args.limit, label=args.label)
+    except checks.TakenError as exc:
+        print(f"error: {text}: {exc}", file=sys.stderr)
+        return True
+    if not issues:
+        print(f"note: {text}: no open issues found", file=sys.stderr)
+    for item in issues:
+        number = item["number"]
+        # The listing already fetched this issue: pass it as
+        # payload so check_issue() skips the redundant GET.
+        jobs.append((f"{owner}/{repo}#{number}", owner, repo, number, item))
+    return False
 
-    A bare owner/repo target is scanned automatically: its open issues
-    (up to --limit, optionally filtered by --label) are each checked.
-    When any repo was scanned, a GO-candidate recommendation summary is
-    printed at the end.
-    Returns 0 when every target produced a verdict, 3 when any target
-    failed to parse or its checks errored.
 
-    Target parsing and repo issue listings stay sequential (cheap, and
-    their error messages keep input order); the per-issue checks run
-    through a worker pool sized by the budget tier, reusing discover's
-    ThreadPoolExecutor pattern. Results are collected in input order,
-    so output is identical to the sequential run.
+def _collect_batch_jobs(targets, args):
+    """Parse targets into check jobs.
+
+    Returns (jobs, failed, scanned_repo). Target parsing and repo issue
+    listings stay sequential (cheap, and their error messages keep input
+    order); jobs is a list of (error label, owner, repo, number, payload)
+    in input order.
     """
-    results = []
+    jobs = []
     failed = False
     scanned_repo = False
-    mode = graphql.fetch_mode(args)
-    jobs = []  # (error label, owner, repo, number, payload) in input order
     for text in targets:
         parsed = parse_target(text)
         if not parsed:
@@ -658,45 +755,65 @@ def run_batch(targets, args):
             continue
         if parsed[0] == "repo":
             scanned_repo = True
-            _, owner, repo = parsed
-            try:
-                issues = checks.list_open_issues(owner, repo, limit=args.limit, label=args.label)
-            except checks.TakenError as exc:
-                print(f"error: {text}: {exc}", file=sys.stderr)
+            _, owner, repo, _number = parsed
+            if _expand_repo_target(text, owner, repo, args, jobs):
                 failed = True
-                continue
-            if not issues:
-                print(f"note: {text}: no open issues found", file=sys.stderr)
-            for item in issues:
-                number = item["number"]
-                # The listing already fetched this issue: pass it as
-                # payload so check_issue() skips the redundant GET.
-                jobs.append((f"{owner}/{repo}#{number}", owner, repo, number, item))
         else:
             _, owner, repo, number = parsed
             jobs.append((text, owner, repo, number, None))
-    if jobs:
-        workers = budget.current().batch_workers
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [
-                pool.submit(
-                    check_one,
-                    owner,
-                    repo,
-                    number,
-                    args.me,
-                    mode,
-                    payload,
-                    _thresholds_from_args(args),
-                )
-                for _, owner, repo, number, payload in jobs
-            ]
-            for (label, _, _, _, _), future in zip(jobs, futures, strict=True):
-                try:
-                    results.append(future.result())
-                except checks.TakenError as exc:
-                    print(f"error: {label}: {exc}", file=sys.stderr)
-                    failed = True
+    return jobs, failed, scanned_repo
+
+
+def _run_batch_jobs(jobs, args, mode):
+    """Run check jobs through a worker pool. Returns (results, failed).
+
+    Results are collected in input order, so output is identical to the
+    sequential run.
+    """
+    results = []
+    failed = False
+    workers = budget.current().batch_workers
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [
+            pool.submit(
+                check_one,
+                owner,
+                repo,
+                number,
+                args.me,
+                mode,
+                payload,
+                _thresholds_from_args(args),
+            )
+            for _, owner, repo, number, payload in jobs
+        ]
+        for (label, _, _, _, _), future in zip(jobs, futures, strict=True):
+            try:
+                results.append(future.result())
+            except checks.TakenError as exc:
+                print(f"error: {label}: {exc}", file=sys.stderr)
+                failed = True
+    return results, failed
+
+
+def _print_go_summary(results):
+    gos = [
+        (target, checks.friendly_labels(findings))
+        for target, verdict, _r, findings in results
+        if verdict == GO
+    ]
+    # First-time-friendly issues first: the safest ones to adopt.
+    gos.sort(key=lambda item: (not item[1], item[0]))
+    print()
+    if gos:
+        noun = "candidate" if len(gos) == 1 else "candidates"
+        parts = [f"{target} ({', '.join(labels)})" if labels else target for target, labels in gos]
+        print(f"{len(gos)} GO {noun}: " + ", ".join(parts))
+    else:
+        print("no GO candidates in this scan.")
+
+
+def _print_batch_results(results, args, scanned_repo):
     if args.json:
         budget_info = checks.budget_report()
         print(
@@ -718,23 +835,32 @@ def run_batch(targets, args):
         for target, verdict, reasons, _findings in results:
             print(format_batch_line(target, verdict, reasons))
         if scanned_repo and results:
-            gos = [
-                (target, checks.friendly_labels(findings))
-                for target, verdict, _r, findings in results
-                if verdict == GO
-            ]
-            # First-time-friendly issues first: the safest ones to adopt.
-            gos.sort(key=lambda item: (not item[1], item[0]))
-            print()
-            if gos:
-                noun = "candidate" if len(gos) == 1 else "candidates"
-                parts = [
-                    f"{target} ({', '.join(labels)})" if labels else target
-                    for target, labels in gos
-                ]
-                print(f"{len(gos)} GO {noun}: " + ", ".join(parts))
-            else:
-                print("no GO candidates in this scan.")
+            _print_go_summary(results)
+
+
+def run_batch(targets, args):
+    """Check many targets; print one verdict line each.
+
+    A bare owner/repo target is scanned automatically: its open issues
+    (up to --limit, optionally filtered by --label) are each checked.
+    When any repo was scanned, a GO-candidate recommendation summary is
+    printed at the end.
+    Returns 0 when every target produced a verdict, 3 when any target
+    failed to parse or its checks errored.
+
+    Target parsing and repo issue listings stay sequential (cheap, and
+    their error messages keep input order); the per-issue checks run
+    through a worker pool sized by the budget tier, reusing discover's
+    ThreadPoolExecutor pattern. Results are collected in input order,
+    so output is identical to the sequential run.
+    """
+    jobs, failed, scanned_repo = _collect_batch_jobs(targets, args)
+    results = []
+    if jobs:
+        batch_results, batch_failed = _run_batch_jobs(jobs, args, graphql.fetch_mode(args))
+        results.extend(batch_results)
+        failed = failed or batch_failed
+    _print_batch_results(results, args, scanned_repo)
     return 3 if failed else 0
 
 

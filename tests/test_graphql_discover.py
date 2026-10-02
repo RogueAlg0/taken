@@ -75,7 +75,8 @@ def test_discover_persistent_mode_uses_thread_local_session(stubbed):
     item = {"number": 1, "updated_at": "2026-09-26T00:00:00Z"}
     entry1, err1 = discover._verify_candidate("o", "r", 1, item, 0, None, mode="persistent")
     entry2, err2 = discover._verify_candidate("o", "r", 1, item, 0, None, mode="persistent")
-    assert err1 is None and err2 is None
+    assert err1 is None
+    assert err2 is None
     assert entry1["target"] == "o/r#1"
     sessions = [c["session"] for c in stubbed]
     assert len(sessions) == 2

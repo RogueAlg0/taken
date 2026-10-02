@@ -9,7 +9,6 @@ anywhere. No aggregator filters on that.
 
 import concurrent.futures
 import random
-import threading
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -82,8 +81,6 @@ def _verify_pool_size():
 # engagement and must not earn the +3 "maintainer replied" points.
 MAINTAINER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
-_thread_state = threading.local()
-
 
 def _thread_graphql_session():
     """One persistent GraphQL session per verify-pool thread.
@@ -93,11 +90,7 @@ def _thread_graphql_session():
     own session (and its own connection) instead. The token is still read
     once per thread from `gh auth token` and held in memory only.
     """
-    session = getattr(_thread_state, "graphql_session", None)
-    if session is None:
-        session = graphql.PersistentGraphQLSession()
-        _thread_state.graphql_session = session
-    return session
+    return graphql.thread_session()
 
 
 def build_query(labels, language=None, updated_after=None):
@@ -195,7 +188,15 @@ def _score_ceiling(updated_at):
 
 
 def _verify_candidate(
-    owner, repo, number, item, min_contributors, me, mode="rest", thresholds=None
+    owner,
+    repo,
+    number,
+    item,
+    min_contributors,
+    me,
+    mode="rest",
+    thresholds=None,
+    repo_memo=None,
 ):
     """Run the full check on one candidate.
 
@@ -207,6 +208,10 @@ def _verify_candidate(
 
     `thresholds` carries the stale-claim decay settings (issue #83);
     None means the defaults.
+
+    `repo_memo` is a checks.RepoMemo shared across the run's candidates:
+    repo-level stages are fetched once per repo instead of once per
+    candidate (matters on a cold cache / --no-cache).
 
     Returns (entry, error): the ranked entry (or None when the candidate
     was filtered by a real verdict), and the TakenError when verification
@@ -221,12 +226,23 @@ def _verify_candidate(
             findings = graphql.run_checks_with_fallback(
                 owner, repo, number, me=me, mode=mode, session=session, thresholds=thresholds
             )
+            engaged_comments = None
         else:
             # The search item already carries every field check_issue()
             # needs, so the per-issue GET is skipped (issue #153): one
             # fewer API call per candidate, up to VERIFY_POOL per run.
-            findings = checks.run_checks(
-                owner, repo, number, me=me, payload=item, thresholds=thresholds
+            # include_comments=True reuses the claimant scan's comment
+            # pages for maintainer-engagement scoring instead of
+            # fetching them a second time.
+            findings, engaged_comments, _ = checks.run_checks(
+                owner,
+                repo,
+                number,
+                me=me,
+                payload=item,
+                thresholds=thresholds,
+                include_comments=True,
+                repo_memo=repo_memo,
             )
     except checks.TakenError as exc:
         return None, exc  # fail-closed per issue; keep scanning the rest
@@ -236,10 +252,15 @@ def _verify_candidate(
     if (findings["repo_health"].get("contributors") or 0) < min_contributors:
         return None, None
     try:
-        # The verdict above already reflects the verified evidence; this
-        # second fetch only scores maintainer engagement, so a truncated
+        # The verdict above already reflects the verified evidence; the
+        # engagement check reuses the claimant scan's comment pages when
+        # the REST path fetched them, and falls back to a fresh fetch when
+        # it did not (early TAKEN exit, or the GraphQL path). A truncated
         # page cap here is not a verdict risk.
-        comments, _ = checks.fetch_comments(owner, repo, number)
+        if engaged_comments is not None:
+            comments = engaged_comments
+        else:
+            comments, _ = checks.fetch_comments(owner, repo, number)
     except checks.TakenError as exc:
         return None, exc  # one bad comments fetch must not abort the run
     engaged = maintainer_engaged(findings["issue"], comments, me=me)
@@ -413,6 +434,135 @@ class _RepoBandit:
         self.arms[repo] = (alpha, beta)
 
 
+class _RollingVerifier:
+    """Rolling verification loop for discover().
+
+    At most `workers` candidates are ever in flight, and the stop proof
+    is evaluated after every completion and BEFORE replacement work is
+    submitted, so no candidate is ever submitted once the top-`limit`
+    ranking is decided (issue #214). Eagerly submitting the whole pool up
+    front would let fast workers start every verification before the
+    proof can fire, doing all the API work the stop exists to save.
+
+    Ceilings cover every candidate that has not banked a score yet:
+    queued and in-flight alike. .verified counts submitted verification
+    work, not consumed completions: one submission is one
+    _verify_candidate run, and nothing is ever cancelled, so every
+    submission runs.
+    """
+
+    def __init__(self, candidates, options, limit):
+        self.candidates = candidates
+        self.options = options
+        self.limit = limit
+        self.workers = max(1, options.jobs)
+        # One repo-level memo per run: repo_health and ai_policy are
+        # per-repo data, so candidates from the same repo share a single
+        # fetch even on a cold cache / --no-cache.
+        self.repo_memo = checks.RepoMemo()
+        self.ranked = []
+        self.errors = 0
+        self.verified = 0
+        self.banked_scores = []
+        self.ceilings = {
+            idx: _score_ceiling(item.get("updated_at"))
+            for idx, (_, _, _, item) in enumerate(candidates)
+        }
+        self.in_flight = {}
+        self.bandit = None
+        self.repo_queues = None
+        self.queue = deque(range(len(candidates)))
+        if options.allocation == "bandit":
+            # Group the pool by repo, keeping recency order inside each
+            # repo: the bandit chooses the repo, recency still chooses the
+            # candidate within it.
+            self.bandit = _RepoBandit(explore_floor=options.explore_floor)
+            self.repo_queues = {}
+            for idx, (owner, repo, _, _) in enumerate(candidates):
+                self.repo_queues.setdefault((owner, repo), deque()).append(idx)
+            self.queue = None
+
+    def has_work(self):
+        if self.bandit is not None:
+            return any(self.repo_queues.values())
+        return bool(self.queue)
+
+    def submit_next(self, pool):
+        if self.bandit is not None:
+            live = [r for r, q in self.repo_queues.items() if q]
+            repo = self.bandit.pick(live)
+            idx = self.repo_queues[repo].popleft()
+        else:
+            idx = self.queue.popleft()
+        owner, repo, number, item = self.candidates[idx]
+        future = pool.submit(
+            _verify_candidate,
+            owner,
+            repo,
+            number,
+            item,
+            self.options.min_contributors,
+            self.options.me,
+            self.options.mode,
+            thresholds=self.options.thresholds,
+            repo_memo=self.repo_memo,
+        )
+        self.in_flight[future] = idx
+        self.verified += 1
+
+    def ranking_decided(self):
+        remaining_ceiling = max(self.ceilings.values(), default=-1)
+        return sum(1 for s in self.banked_scores if s > remaining_ceiling) >= self.limit
+
+    def _prime(self, pool):
+        while self.has_work() and len(self.in_flight) < self.workers:
+            self.submit_next(pool)
+
+    def _consume(self, future, done):
+        idx = self.in_flight.pop(future)
+        del self.ceilings[idx]
+        entry, error = future.result()
+        done += 1
+        if self.options.on_progress is not None:
+            self.options.on_progress(done, len(self.candidates))
+        if self.bandit is not None and error is None:
+            # A clean verification is one Bernoulli trial for the repo:
+            # GO banked or not. A transport error says nothing about the
+            # repo's yield, so it is skipped.
+            owner, repo, _, _ = self.candidates[idx]
+            self.bandit.update((owner, repo), entry is not None)
+        if error is not None:
+            self.errors += 1
+        elif entry is not None:
+            self.ranked.append(entry)
+            self.banked_scores.append(entry["score"])
+        return done
+
+    def run(self):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.workers) as pool:
+            self._prime(pool)
+            done = 0
+            stopped = False
+            while self.in_flight and not stopped:
+                finished, _ = concurrent.futures.wait(
+                    self.in_flight, return_when=concurrent.futures.FIRST_COMPLETED
+                )
+                for future in finished:
+                    done = self._consume(future, done)
+                    if self.ranking_decided():
+                        # The top-`limit` ranking is decided: no remaining
+                        # candidate can displace the banked top-`limit`, so
+                        # the rest of the queue is never submitted. In-flight
+                        # futures finish during executor shutdown; their
+                        # results are discarded (a bounded overrun of at most
+                        # `workers - 1` extra verifications).
+                        stopped = True
+                        break
+                if not stopped:
+                    self._prime(pool)
+        return self.ranked, self.errors, self.verified
+
+
 def discover(options=None):
     """Search, verify, and rank contribution candidates.
 
@@ -463,111 +613,8 @@ def discover(options=None):
     if limit == 0:
         # Nothing can make the cut; skip verification entirely.
         return DiscoverResults([], errors=0, total=total, verified=0, search_errors=search_errors)
-    ranked = []
-    errors = 0
-    verified = 0
-    banked_scores = []
-    workers = max(1, options.jobs)
-    # Rolling submission (issue #214): at most `workers` candidates are in
-    # flight at any time. The stop proof is evaluated after every
-    # completion and BEFORE replacement work is submitted, so no candidate
-    # is ever submitted once the top-`limit` ranking is decided. (Eagerly
-    # submitting the whole pool up front would let fast workers start
-    # every verification before the proof can fire, doing all the API work
-    # the stop exists to save.) Ceilings cover every candidate that has
-    # not banked a score yet: queued and in-flight alike.
-    ceilings = {
-        idx: _score_ceiling(item.get("updated_at"))
-        for idx, (_, _, _, item) in enumerate(candidates)
-    }
-    bandit = None
-    repo_queues = None
-    queue = deque(range(len(candidates)))
-    if options.allocation == "bandit":
-        # Group the pool by repo, keeping recency order inside each repo:
-        # the bandit chooses the repo, recency still chooses the
-        # candidate within it.
-        bandit = _RepoBandit(explore_floor=options.explore_floor)
-        repo_queues = {}
-        for idx, (owner, repo, _, _) in enumerate(candidates):
-            repo_queues.setdefault((owner, repo), deque()).append(idx)
-        queue = None
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        in_flight = {}
-
-        def has_work():
-            if bandit is not None:
-                return any(repo_queues.values())
-            return bool(queue)
-
-        def submit_next():
-            nonlocal verified
-            if bandit is not None:
-                live = [r for r, q in repo_queues.items() if q]
-                repo = bandit.pick(live)
-                idx = repo_queues[repo].popleft()
-            else:
-                idx = queue.popleft()
-            owner, repo, number, item = candidates[idx]
-            future = pool.submit(
-                _verify_candidate,
-                owner,
-                repo,
-                number,
-                item,
-                options.min_contributors,
-                options.me,
-                options.mode,
-                thresholds=options.thresholds,
-            )
-            in_flight[future] = idx
-            # .verified counts submitted verification work, not consumed
-            # completions: one submission is one _verify_candidate run.
-            # Nothing is ever cancelled, so every submission runs.
-            verified += 1
-
-        def ranking_decided():
-            remaining_ceiling = max(ceilings.values(), default=-1)
-            return sum(1 for s in banked_scores if s > remaining_ceiling) >= limit
-
-        while has_work() and len(in_flight) < workers:
-            submit_next()
-        done = 0
-        stopped = False
-        while in_flight and not stopped:
-            finished, _ = concurrent.futures.wait(
-                in_flight, return_when=concurrent.futures.FIRST_COMPLETED
-            )
-            for future in finished:
-                idx = in_flight.pop(future)
-                del ceilings[idx]
-                entry, error = future.result()
-                done += 1
-                if options.on_progress is not None:
-                    options.on_progress(done, total)
-                if bandit is not None and error is None:
-                    # A clean verification is one Bernoulli trial for the
-                    # repo: GO banked or not. A transport error says
-                    # nothing about the repo's yield, so it is skipped.
-                    owner, repo, _, _ = candidates[idx]
-                    bandit.update((owner, repo), entry is not None)
-                if error is not None:
-                    errors += 1
-                elif entry is not None:
-                    ranked.append(entry)
-                    banked_scores.append(entry["score"])
-                if ranking_decided():
-                    # The top-`limit` ranking is decided: no remaining
-                    # candidate can displace the banked top-`limit`, so
-                    # the rest of the queue is never submitted. In-flight
-                    # futures finish during executor shutdown; their
-                    # results are discarded (a bounded overrun of at most
-                    # `workers - 1` extra verifications).
-                    stopped = True
-                    break
-            if not stopped:
-                while has_work() and len(in_flight) < workers:
-                    submit_next()
+    verifier = _RollingVerifier(candidates, options, limit)
+    ranked, errors, verified = verifier.run()
     # Score desc, then recency desc: the freshest candidate wins ties.
     # (A single sort; the old double-sort accidentally left equal scores
     # oldest-first because the second stable sort preserved the first.)

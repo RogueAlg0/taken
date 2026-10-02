@@ -52,12 +52,12 @@ def test_stops_after_short_page(monkeypatch):
     assert len(fake.calls) == 1  # no second page fetched
 
 
-def test_caps_at_three_pages(monkeypatch):
+def test_caps_at_one_page(monkeypatch):
     full = [commit(f"dev{i}") for i in range(100)]
     fake = make_fake([full, full, full, full])
     monkeypatch.setattr(checks, "gh_api", fake)
     assert checks.count_recent_contributors("octo", "repo") == 100
-    assert len(fake.calls) == 3
+    assert len(fake.calls) == 1
 
 
 def test_repo_health_reports_contributors(monkeypatch):

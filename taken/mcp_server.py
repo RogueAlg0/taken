@@ -23,8 +23,9 @@ from typing import Annotated
 try:
     from pydantic import Field
 except ImportError:  # pydantic ships with the `mcp` dependency
-
-    def Field(**kwargs):  # type: ignore[no-redef]
+    # S1542 false positive: mirrors pydantic's public Field name, so
+    # callers can use Field(...) with or without pydantic installed.
+    def Field(**kwargs):  # type: ignore[no-redef]  # NOSONAR
         return kwargs
 
 
@@ -32,7 +33,7 @@ from taken import __version__, budget, checks, discover, graphql
 from taken.verdict import decide
 
 
-def _check_one(owner, repo, number, me=None, mode=None, payload=None):
+def _check_one(owner, repo, number, me=None, mode=None, payload=None, session=None):
     """Run the full check suite on one issue; return the tool payload.
 
     ``mode`` selects the fetch path ("rest", "graphql", "persistent");
@@ -44,11 +45,20 @@ def _check_one(owner, repo, number, me=None, mode=None, payload=None):
 
     `payload` is an optional pre-fetched issue item: on the REST path it
     skips the per-issue refetch (issue #211).
+
+    `session` is an optional persistent GraphQL session. In persistent
+    mode with no session given, each calling thread gets its own session
+    via graphql.thread_session(); the process-wide singleton is never
+    shared across pool worker threads (issue #317).
     """
     if mode is None:
         mode = graphql.fetch_mode()
+    if mode == "persistent" and session is None:
+        # Runs on the worker thread, so thread-local storage hands this
+        # thread its own session instead of the shared singleton.
+        session = graphql.thread_session()
     findings = graphql.run_checks_with_fallback(
-        owner, repo, number, me=me, mode=mode, payload=payload
+        owner, repo, number, me=me, mode=mode, payload=payload, session=session
     )
     verdict, reasons = decide(findings)
     return {
@@ -132,7 +142,12 @@ def check_issue(
     """
     # Explicit flags win; otherwise the transport is automatic from auth
     # state (GraphQL when logged in, REST when anonymous), like the CLI.
-    mode = "persistent" if persistent_session else ("graphql" if graphql else None)
+    if persistent_session:
+        mode = "persistent"
+    elif graphql:
+        mode = "graphql"
+    else:
+        mode = None
     try:
         return _check_one(owner, repo, issue_number, me=me, mode=mode)
     except (checks.TakenError, subprocess.TimeoutExpired) as exc:

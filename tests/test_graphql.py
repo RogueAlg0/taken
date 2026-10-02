@@ -210,7 +210,8 @@ def test_graphql_via_gh_posts_query():
     assert out == payload
     cmd = run.call_args[0][0]
     assert cmd[:3] == ["gh", "api", "graphql"]
-    assert "-f" in cmd and any(a.startswith("query=") for a in cmd)
+    assert "-f" in cmd
+    assert any(a.startswith("query=") for a in cmd)
 
 
 def test_graphql_via_gh_errors_fail_closed():
@@ -231,6 +232,23 @@ def test_graphql_via_gh_rate_limited_retries_then_raises():
 def test_graphql_via_gh_missing_binary():
     with mock.patch.object(subprocess, "run", side_effect=FileNotFoundError):
         with pytest.raises(checks.TakenError, match="`gh` CLI"):
+            graphql.graphql_via_gh("query Q { x }", {})
+
+
+@pytest.mark.parametrize(
+    ("stdout", "expected"),
+    [("transport closed", "transport closed"), ("", "exit status 2")],
+)
+def test_graphql_via_gh_failure_without_stderr_has_a_diagnostic(stdout, expected):
+    with mock.patch.object(subprocess, "run", return_value=_run_result(stdout, rc=2)):
+        with pytest.raises(checks.TakenError, match=expected):
+            graphql.graphql_via_gh("query Q { x }", {})
+
+
+def test_graphql_via_gh_failure_prefers_stderr_over_stdout():
+    result = _run_result("less useful stdout", rc=2, stderr="specific stderr")
+    with mock.patch.object(subprocess, "run", return_value=result):
+        with pytest.raises(checks.TakenError, match="specific stderr"):
             graphql.graphql_via_gh("query Q { x }", {})
 
 
@@ -289,7 +307,8 @@ def test_persistent_session_never_logs_token(capfd):
         sess = graphql.PersistentGraphQLSession(token_provider=lambda: "sekret-token")
         sess.query("query Q { x }", {})
     out, err = capfd.readouterr()
-    assert "sekret-token" not in out and "sekret-token" not in err
+    assert "sekret-token" not in out
+    assert "sekret-token" not in err
 
 
 def test_persistent_session_auth_token_failure():
@@ -463,8 +482,9 @@ def test_merged_pr_state_normalizes_to_closed(monkeypatch):
 
 def test_missing_issue_raises_not_found(monkeypatch):
     repo = _repo_node(issue=None)
+    payload = _payload(repo)
     with pytest.raises(checks.NotFoundError):
-        _run_with_fake_transport(monkeypatch, _payload(repo))
+        _run_with_fake_transport(monkeypatch, payload)
 
 
 def test_missing_repo_raises_not_found(monkeypatch):

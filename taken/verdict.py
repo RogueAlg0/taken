@@ -76,11 +76,11 @@ def age_phrase(days):
 
 
 def _truncation_reasons(findings):
-    """CAUTION reasons for timeline/comment/label scans that stopped at the page cap."""
+    """CAUTION reasons for timeline/comment/label scans that stopped early."""
     reasons = []
     scan_truncated = findings.get("scan_truncated") or {}
     if scan_truncated.get("timeline"):
-        reasons.append("timeline scan hit the page cap; a linked PR beyond the cap would be missed")
+        reasons.append("timeline scan stopped early; a linked PR beyond the scan would be missed")
     if scan_truncated.get("comments"):
         reasons.append("comment scan hit the page cap; a claimant beyond the cap would be missed")
     if scan_truncated.get("labels"):
@@ -133,6 +133,73 @@ def _silence_window_days(findings):
     return thresholds.get("claim_silence_days", 7)
 
 
+def _open_pr_reasons(pr, pr_idle_days):
+    """Reasons for one open linked PR.
+
+    An open PR with no activity past the threshold is stale work, not live
+    coverage, so its TAKEN signal weakens to CAUTION (validated half of
+    issue #83). Unknown activity stays TAKEN (fail closed).
+    """
+    idle = pr.get("idle_days")
+    if idle is not None and idle > pr_idle_days:
+        return [], [
+            f"open PR #{pr['number']} idle {idle}d with no activity "
+            f"(past the {pr_idle_days}d threshold): treating as stale: {pr['url']}"
+        ]
+    detail = f" (last activity {age_phrase(idle)})" if idle is not None else ""
+    return [f"open PR #{pr['number']} already covers this{detail}: {pr['url']}"], []
+
+
+def _pr_verdict_reasons(linked_prs, pr_idle_days):
+    """(taken, caution) reasons from linked PRs, in scan order."""
+    taken, caution = [], []
+    for pr in linked_prs:
+        if pr["state"] == "open":
+            pr_taken, pr_caution = _open_pr_reasons(pr, pr_idle_days)
+        elif pr["merged"]:
+            pr_taken, pr_caution = (
+                [],
+                [
+                    f"PR #{pr['number']} was merged but the issue is still open "
+                    f"(stale?): {pr['url']}"
+                ],
+            )
+        else:
+            pr_taken, pr_caution = [], []
+        taken.extend(pr_taken)
+        caution.extend(pr_caution)
+    return taken, caution
+
+
+def _claimant_verdict_reasons(claimants, window):
+    """(caution, expired) from claimant hits.
+
+    Claimant-silence redesign (issue #83): a claim blocks as CAUTION only
+    while the claimant was recently active. The clock resets on any
+    claimant activity; a claim never auto-closes anything, it only ever
+    yields CAUTION.
+    """
+    caution = []
+    expired = 0
+    for hit in claimants:
+        since = hit.get("days_since_claimant_activity")
+        if since is not None and since > window:
+            expired += 1
+            continue
+        label = hit.get("age_label") or "expressed interest"
+        caution.append(f'{hit["author"]} {label}: "{hit["snippet"]}" ({hit["url"]})')
+    return caution, expired
+
+
+def _policy_verdict_reasons(verdict):
+    """Caution reasons for the repo AI-policy verdict."""
+    if verdict == "ban":
+        return ["repo bans AI-generated contributions"]
+    if verdict == "disclosure-required":
+        return ["repo requires AI disclosure on contributions"]
+    return []
+
+
 def decide(findings):
     """Return (verdict, reasons). TAKEN wins over CAUTION wins over GO."""
     taken_reasons = []
@@ -144,54 +211,21 @@ def decide(findings):
     if issue["state"] == "closed":
         taken_reasons.append(f"issue is closed: {issue['url']}")
 
-    for pr in findings["linked_prs"]:
-        if pr["state"] == "open":
-            idle = pr.get("idle_days")
-            if idle is not None and idle > pr_idle_days:
-                # Validated half of issue #83: an open PR with no activity
-                # past the threshold is stale work, not live coverage, so
-                # its TAKEN signal weakens to CAUTION. Unknown activity
-                # stays TAKEN (fail closed).
-                caution_reasons.append(
-                    f"open PR #{pr['number']} idle {idle}d with no activity "
-                    f"(past the {pr_idle_days}d threshold): treating as stale: {pr['url']}"
-                )
-            else:
-                detail = ""
-                if idle is not None:
-                    detail = f" (last activity {age_phrase(idle)})"
-                taken_reasons.append(
-                    f"open PR #{pr['number']} already covers this{detail}: {pr['url']}"
-                )
-        elif pr["merged"]:
-            caution_reasons.append(
-                f"PR #{pr['number']} was merged but the issue is still open (stale?): {pr['url']}"
-            )
+    pr_taken, pr_caution = _pr_verdict_reasons(findings["linked_prs"], pr_idle_days)
+    taken_reasons.extend(pr_taken)
+    caution_reasons.extend(pr_caution)
 
     if issue["assignees"]:
         taken_reasons.append(f"assigned to: {', '.join(issue['assignees'])}")
 
     window = _silence_window_days(findings)
-    expired_claims = 0
-    for hit in findings["claimants"]:
-        since = hit.get("days_since_claimant_activity")
-        if since is not None and since > window:
-            # Claimant-silence redesign (issue #83): a claim blocks as
-            # CAUTION only while the claimant was recently active. The
-            # clock resets on any claimant activity; a claim never
-            # auto-closes anything, it only ever yields CAUTION.
-            expired_claims += 1
-            continue
-        label = hit.get("age_label") or "expressed interest"
-        caution_reasons.append(f'{hit["author"]} {label}: "{hit["snippet"]}" ({hit["url"]})')
+    claim_caution, expired_claims = _claimant_verdict_reasons(findings["claimants"], window)
+    caution_reasons.extend(claim_caution)
 
     policy = findings["ai_policy"]["verdict"]
-    if policy == "ban":
-        caution_reasons.append("repo bans AI-generated contributions")
-    elif policy == "disclosure-required":
-        caution_reasons.append("repo requires AI disclosure on contributions")
+    caution_reasons.extend(_policy_verdict_reasons(policy))
 
-    # A scan that stopped early at the page cap did not see everything.
+    # A scan that stopped early did not see everything.
     # Downgrade to CAUTION rather than risk a GO on incomplete evidence.
     caution_reasons.extend(_truncation_reasons(findings))
 
