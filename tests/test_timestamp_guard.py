@@ -31,7 +31,11 @@ def test_repo_recent_merges_malformed_timestamp():
     prs_page = [
         {"merged_at": "invalid-iso-string"},
         {"merged_at": None},
-        {"merged_at": (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")},
+        {
+            "merged_at": (datetime.now(timezone.utc) - timedelta(days=2)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+        },
     ]
     with patch.object(checks, "gh_api", return_value=prs_page):
         merges = checks._repo_recent_merges("owner", "repo", cutoff, pulls_pages=1)
@@ -54,7 +58,11 @@ def test_graphql_count_recent_merges_malformed_timestamp():
             "nodes": [
                 {"mergedAt": "malformed-ts-1"},
                 {"mergedAt": None},
-                {"mergedAt": (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")},
+                {
+                    "mergedAt": (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    )
+                },
             ]
         }
     }

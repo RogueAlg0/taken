@@ -1380,8 +1380,9 @@ def _repo_push_info(owner, repo, window_days=HEALTH_WINDOW_DAYS):
     pushed_at = data.get("pushed_at") or ""
     pushed_recently = False
     if pushed_at:
-        pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", _UTC_SUFFIX))
-        pushed_recently = datetime.now(timezone.utc) - pushed_dt <= timedelta(days=window_days)
+        pushed_dt = _parse_ts(pushed_at)
+        if pushed_dt is not None:
+            pushed_recently = datetime.now(timezone.utc) - pushed_dt <= timedelta(days=window_days)
     return pushed_at, pushed_recently
 
 
@@ -1413,8 +1414,8 @@ def _repo_recent_merges(owner, repo, cutoff, pulls_pages):
             merged_at = pr.get("merged_at")
             if not merged_at:
                 continue
-            merged_dt = datetime.fromisoformat(merged_at.replace("Z", _UTC_SUFFIX))
-            if merged_dt >= cutoff:
+            merged_dt = _parse_ts(merged_at)
+            if merged_dt is not None and merged_dt >= cutoff:
                 recent_merges += 1
         if len(prs) < 50:
             break
