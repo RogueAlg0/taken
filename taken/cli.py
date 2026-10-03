@@ -55,6 +55,14 @@ def _non_negative_int(value):
 
 
 def build_parser():
+    """Build and return the argument parser for the taken CLI.
+
+    Takes no arguments. Configures command-line flags and options for
+    positional issue targets, file inputs (--file), repository scanning
+    (--limit, --label), candidate discovery (--discover), maintainer health
+    reports (--health), cache management, output formatting (--json, --verbose,
+    --debug), and stale-claim decay thresholds.
+    """
     parser = argparse.ArgumentParser(
         prog="taken",
         description="Check whether a GitHub issue is already taken before you volunteer for it.",
@@ -305,6 +313,13 @@ def _human_repo_health(health, skipped, not_checked):
 
 
 def format_human(findings, verdict, reasons):
+    """Format single-issue check results into a human-readable terminal report.
+
+    Accepts `findings` (the dictionary of issue metadata, linked PRs, claimants,
+    AI policy, repo health, and any skipped stages or transport fallback notes),
+    the final `verdict` string (GO, TAKEN, or CAUTION), and a list of `reasons`
+    explaining the decision, returning a multiline string for terminal output.
+    """
     issue = findings["issue"]
     health = findings["repo_health"]
     policy = findings["ai_policy"]
@@ -403,6 +418,15 @@ def _run_target_command(parser, args, targets):
 
 
 def main(argv=None):
+    """Main CLI entry point orchestrating argument parsing, dispatch, and exit codes.
+
+    Accepts `argv` (argument strings, defaulting to sys.argv[1:]), parses flags with
+    `build_parser`, and routes execution: `--clear-cache` to `run_clear_cache`,
+    `--discover` to `run_discover`, `--health` to `run_health`, a single issue/repo
+    target to `run_single`, and multiple targets to `run_batch`. Follows the exit-code
+    contract: 0 on GO or command success, 1 on TAKEN (or cache clear error), 2 on
+    CAUTION, and 3 on unparseable targets, missing arguments, or API/network errors.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.clear_cache:
@@ -449,6 +473,12 @@ def _run_with_stats(func, *fargs, verbose=False, debug=False):
 
 
 def format_discover_line(result):
+    """Format a single candidate discovery result into a one-line summary.
+
+    Takes `result`, a candidate dictionary containing the computed `score`,
+    `target` identifier (owner/repo#number), `why` reason list, and any
+    `friendly_labels` or `welcoming` signals, and returns a formatted single-line string.
+    """
     why = "; ".join(result["why"])
     markers = "".join(f" [{m}]" for m in result["friendly_labels"] + result["welcoming"])
     return f"{result['score']:3}  {result['target']}  {why}{markers}"
@@ -650,6 +680,13 @@ def run_clear_cache():
 
 
 def run_single(text, args):
+    """Check a single target issue or dispatch a bare repo target to run_batch.
+
+    Parses the target string `text` (such as owner/repo#123 or an issue URL), runs
+    issue checks via `check_one` with options from `args` (including `--json`, `--me`,
+    and decay thresholds), prints either human-readable or JSON output, and returns
+    the exit code (0 for GO, 1 for TAKEN, 2 for CAUTION, or 3 on parse/API errors).
+    """
     parsed = parse_target(text)
     if not parsed:
         return _parse_error(text)
@@ -715,6 +752,12 @@ def run_health(owner, repo, args):
 
 
 def format_batch_line(target, verdict, reasons):
+    """Format a target's check result into a single line for batch output.
+
+    Takes the `target` identifier string, the `verdict` string (GO, TAKEN, or CAUTION),
+    and a sequence of `reasons`, returning a compact line displaying the padded
+    verdict, target name, and primary reason.
+    """
     first = reasons[0] if reasons else ""
     return f"{verdict:7} {target}  {first}"
 
