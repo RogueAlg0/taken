@@ -30,7 +30,7 @@ except ImportError:  # pydantic ships with the `mcp` dependency
 
 
 from taken import __version__, budget, checks, discover, graphql
-from taken.verdict import decide
+from taken.verdict import decide, GO, CAUTION, TAKEN
 
 
 def _check_one(
@@ -109,7 +109,7 @@ def _error_payload(exc: Exception) -> dict[str, str]:
 
 
 # Verdict ordering for scan_repo: best candidates first.
-_VERDICT_RANK = {"GO": 0, "CAUTION": 1, "TAKEN": 2}
+_VERDICT_RANK = {GO: 0, CAUTION: 1, TAKEN: 2}
 
 
 def _decay_thresholds(pr_idle_days=None, claim_silence_days=None, claim_silence_complex_days=None):
@@ -328,7 +328,7 @@ def scan_repo(
                 }
             )
     results.sort(key=lambda r: _VERDICT_RANK.get(str(r.get("verdict") or ""), 3))
-    summary = {"GO": 0, "CAUTION": 0, "TAKEN": 0, "errors": 0}
+    summary = {GO: 0, CAUTION: 0, TAKEN: 0, "errors": 0}
     for item in results:
         verdict = item.get("verdict")
         if verdict in summary:
@@ -339,7 +339,7 @@ def scan_repo(
         "target": f"{owner}/{repo}",
         "effective_parameters": effective_parameters,
         "results": results,
-        "recommendations": [r["target"] for r in results if r.get("verdict") == "GO"],
+        "recommendations": [r["target"] for r in results if r.get("verdict") == GO],
         "summary": summary,
         "budget": checks.budget_report(),
     }
