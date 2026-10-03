@@ -221,14 +221,15 @@ def scan_repo(
             except (checks.TakenError, subprocess.TimeoutExpired) as exc:
                 results.append({"target": f"{owner}/{repo}#{number}", **_error_payload(exc)})
                 continue
-            findings = payload["findings"]
+            # The _check_one payload already carries the markers; reuse
+            # them instead of recomputing (issue #46).
             results.append(
                 {
                     "target": payload["target"],
                     "verdict": payload["verdict"],
                     "reasons": payload["reasons"],
-                    "friendly_labels": checks.friendly_labels(findings),
-                    "welcoming": checks.welcoming_signals(findings),
+                    "friendly_labels": payload["friendly_labels"],
+                    "welcoming": payload["welcoming"],
                 }
             )
     results.sort(key=lambda r: _VERDICT_RANK.get(str(r.get("verdict") or ""), 3))

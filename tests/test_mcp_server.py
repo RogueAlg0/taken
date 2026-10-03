@@ -210,6 +210,30 @@ def test_scan_repo_carries_friendly_and_welcoming(monkeypatch):
     assert result["welcoming"] == []  # no CONTRIBUTING.md in this fake
 
 
+def test_scan_repo_does_not_recompute_markers(monkeypatch, faked):
+    # Issue #46: _check_one already computes the markers, so scan_repo
+    # must reuse the payload fields instead of calling the helpers again.
+    # Thread-safe counters: _check_one runs on pool worker threads.
+    friendly_calls, welcoming_calls = [], []
+    real_friendly, real_welcoming = checks.friendly_labels, checks.welcoming_signals
+
+    def counting_friendly(findings):
+        friendly_calls.append(1)
+        return real_friendly(findings)
+
+    def counting_welcoming(findings):
+        welcoming_calls.append(1)
+        return real_welcoming(findings)
+
+    monkeypatch.setattr(checks, "friendly_labels", counting_friendly)
+    monkeypatch.setattr(checks, "welcoming_signals", counting_welcoming)
+    payload = scan_repo("octo", "repo", limit=10)
+    assert len(payload["results"]) == 3
+    # Once per issue inside _check_one; scan_repo itself adds none.
+    assert len(friendly_calls) == 3
+    assert len(welcoming_calls) == 3
+
+
 def test_scan_repo_error_dict(monkeypatch):
     def boom(endpoint, params=None):
         raise checks.TakenError("repo gone")
