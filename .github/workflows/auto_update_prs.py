@@ -8,7 +8,8 @@ their author.
 Every failure mode is a skip, never an error: a PR that cannot be updated
 (maintainer edits disabled on the fork, the author pushed concurrently,
 the fork was deleted, mergeability still unknown) is simply retried on
-the next push to main.
+the next push to main. Skips are always logged and summarized at the end,
+so no failure passes silently.
 """
 
 import json
@@ -18,12 +19,21 @@ import urllib.error
 import urllib.request
 
 API = "https://api.github.com"
-REPO = os.environ["GITHUB_REPOSITORY"]
-TOKEN = os.environ["GH_TOKEN"]
+PER_PAGE = 100
 # GitHub computes mergeability asynchronously; right after a push to main
 # open PRs report "unknown" for a short while.
 MERGEABILITY_RETRIES = 6
 MERGEABILITY_SLEEP = 10
+
+
+def _repo():
+    # Read lazily so importing this module has no side effects and needs
+    # no environment (the test suite imports it directly).
+    return os.environ["GITHUB_REPOSITORY"]
+
+
+def _token():
+    return os.environ["GH_TOKEN"]
 
 
 def api(method, path, data=None):
@@ -33,7 +43,7 @@ def api(method, path, data=None):
         data=body,
         method=method,
         headers={
-            "Authorization": f"Bearer {TOKEN}",
+            "Authorization": f"Bearer {_token()}",
             "Accept": "application/vnd.github+json",
             "Content-Type": "application/json",
         },
@@ -51,20 +61,40 @@ def api(method, path, data=None):
         return exc.code, {"error": detail}
 
 
+def list_open_prs():
+    """Yield every open PR, walking pages of PER_PAGE until a short page."""
+    page = 1
+    while True:
+        status, prs = api(
+            "GET", f"/repos/{_repo()}/pulls?state=open&per_page={PER_PAGE}&page={page}"
+        )
+        if status != 200:
+            raise SystemExit(f"could not list PRs: {status} {prs}")
+        yield from prs
+        if len(prs) < PER_PAGE:
+            break
+        page += 1
+
+
 def behind_prs():
-    """Yield (number, head_sha) for open, non-draft PRs behind main."""
-    status, prs = api("GET", f"/repos/{REPO}/pulls?state=open&per_page=100")
-    if status != 200:
-        raise SystemExit(f"could not list PRs: {status} {prs}")
-    for pr in prs:
+    """Return (behind, skipped).
+
+    behind is a list of (number, head_sha) for open, non-draft PRs behind
+    main. skipped is a list of (number, reason) for PRs that could not be
+    examined; every skip is logged as it happens and summarized by main().
+    """
+    behind, skipped = [], []
+    for pr in list_open_prs():
         if pr.get("draft"):
             continue
         number = pr["number"]
         state, head_sha = "unknown", None
         for _ in range(MERGEABILITY_RETRIES):
-            status, full = api("GET", f"/repos/{REPO}/pulls/{number}")
+            status, full = api("GET", f"/repos/{_repo()}/pulls/{number}")
             if status != 200:
-                print(f"PR #{number}: unreadable ({status}); skipping")
+                reason = f"unreadable ({status})"
+                print(f"PR #{number}: {reason}; skipping")
+                skipped.append((number, reason))
                 break
             state = full.get("mergeable_state")
             head_sha = full["head"]["sha"]
@@ -72,29 +102,49 @@ def behind_prs():
                 break
             time.sleep(MERGEABILITY_SLEEP)
         else:
-            print(f"PR #{number}: mergeability still unknown; skipping")
+            reason = "mergeability still unknown"
+            print(f"PR #{number}: {reason}; skipping")
+            skipped.append((number, reason))
             continue
         if state == "behind":
-            yield number, head_sha
+            behind.append((number, head_sha))
         # "clean" is up to date; "dirty" has real conflicts for the author.
+    return behind, skipped
+
+
+def summarize(updated, skipped):
+    """Log the final tally; returns the summary line for tests."""
+    parts = [f"done: {updated} PR branch(es) updated"]
+    if skipped:
+        parts.append("skipped: " + ", ".join(f"#{n} ({r})" for n, r in skipped))
+    summary = "; ".join(parts)
+    print(summary)
+    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if step_summary:
+        with open(step_summary, "a") as fh:
+            fh.write(f"### Auto-update PR branches\n\n{summary}\n")
+    return summary
 
 
 def main():
+    behind, skipped = behind_prs()
     updated = 0
-    for number, head_sha in behind_prs():
+    for number, head_sha in behind:
         # expected_head_sha makes a concurrent author push fail the call
         # instead of racing it; that PR is retried on the next push.
         status, resp = api(
             "PUT",
-            f"/repos/{REPO}/pulls/{number}/update-branch",
+            f"/repos/{_repo()}/pulls/{number}/update-branch",
             {"expected_head_sha": head_sha},
         )
         if status in (200, 202):
             print(f"PR #{number}: branch updated to main")
             updated += 1
         else:
-            print(f"PR #{number}: skipped ({status}: {resp.get('error')})")
-    print(f"done: {updated} PR branch(es) updated")
+            reason = f"{status}: {(resp or {}).get('error')}"
+            print(f"PR #{number}: skipped ({reason})")
+            skipped.append((number, reason))
+    summarize(updated, skipped)
 
 
 if __name__ == "__main__":
