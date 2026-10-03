@@ -24,6 +24,11 @@ def load_hotspots(tmp_path, monkeypatch):
 
 @pytest.fixture
 def hotspots(tmp_path, monkeypatch):
+    # radon is not a test dependency (only the hotspots workflow installs
+    # it via `uv run --with radon`); skip instead of failing where it is
+    # absent. The script itself stays fail-closed: without radon, main()
+    # exits 2 because it cannot verify anything.
+    pytest.importorskip("radon")
     return load_hotspots(tmp_path, monkeypatch)
 
 
