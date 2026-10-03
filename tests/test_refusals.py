@@ -1,6 +1,7 @@
 """Refusal-path tests: the tool must say no (or fail loudly) in the right way."""
 
 import base64
+from datetime import datetime, timezone
 
 from test_verdict import base_findings
 
@@ -67,10 +68,11 @@ def test_empty_target_is_exit_3():
 
 
 def make_comment(author, body):
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {
         "user": {"login": author},
         "body": body,
-        "created_at": "2026-09-25T10:00:00Z",
+        "created_at": now,
         "html_url": "https://github.com/octo/repo/issues/1#issuecomment-1",
     }
 

@@ -52,6 +52,8 @@ drift between fetch paths.
 - `taken/mcp_server.py` - the `taken-mcp` stdio server. Three tools:
   `check_issue`, `scan_repo`, `discover_candidates`. Thin wrappers over the
   same functions the CLI uses.
+- `taken/budget.py` - API budget tiers (anonymous vs authenticated), paging caps, and worker sizing.
+- `taken/health.py` - the `--health` maintainer report: unattended claims, stale PRs, untouched beginner issues, and untriaged issues.
 
 ## Invariants
 
