@@ -5,6 +5,10 @@ behind main but merges cleanly, merges main into the PR branch via the
 update-branch API. PRs with real content conflicts are left alone for
 their author.
 
+Every open PR gets exactly one disposition line in the log (updated,
+or skipped with a reason), so the log answers "why was this branch
+not updated" without code archaeology.
+
 Every failure mode is a skip, never an error: a PR that cannot be updated
 (maintainer edits disabled on the fork, the author pushed concurrently,
 the fork was deleted, mergeability still unknown) is simply retried on
@@ -80,20 +84,23 @@ def behind_prs():
     """Return (behind, skipped).
 
     behind is a list of (number, head_sha) for open, non-draft PRs behind
-    main. skipped is a list of (number, reason) for PRs that could not be
-    examined; every skip is logged as it happens and summarized by main().
+    main. skipped is a list of (number, reason) for every other open PR;
+    every skip is logged as it happens and summarized by main().
     """
     behind, skipped = [], []
     for pr in list_open_prs():
-        if pr.get("draft"):
-            continue
         number = pr["number"]
+        if pr.get("draft"):
+            reason = "draft"
+            print(f"PR #{number}: skipped ({reason})")
+            skipped.append((number, reason))
+            continue
         state, head_sha = "unknown", None
         for _ in range(MERGEABILITY_RETRIES):
             status, full = api("GET", f"/repos/{_repo()}/pulls/{number}")
             if status != 200:
                 reason = f"unreadable ({status})"
-                print(f"PR #{number}: {reason}; skipping")
+                print(f"PR #{number}: skipped ({reason})")
                 skipped.append((number, reason))
                 break
             state = full.get("mergeable_state")
@@ -103,12 +110,16 @@ def behind_prs():
             time.sleep(MERGEABILITY_SLEEP)
         else:
             reason = "mergeability still unknown"
-            print(f"PR #{number}: {reason}; skipping")
+            print(f"PR #{number}: skipped ({reason})")
             skipped.append((number, reason))
             continue
         if state == "behind":
             behind.append((number, head_sha))
-        # "clean" is up to date; "dirty" has real conflicts for the author.
+        else:
+            # "clean" is up to date; "dirty"/"blocked" stay with the author.
+            reason = f"mergeable_state={state}"
+            print(f"PR #{number}: skipped ({reason})")
+            skipped.append((number, reason))
     return behind, skipped
 
 

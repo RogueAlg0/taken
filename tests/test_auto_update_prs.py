@@ -167,7 +167,9 @@ def test_failures_are_surfaced_not_silent(monkeypatch, capsys):
     assert [c[1] for c in http.puts()] == [f"{UPDATE}/7/update-branch"]
 
 
-def test_draft_prs_are_ignored(monkeypatch):
+def test_draft_prs_are_reported_as_skipped(monkeypatch, capsys):
+    """Drafts are not updated, but they get a disposition line and land
+    in the skip summary instead of vanishing silently (issue #367)."""
     mod = load_script(monkeypatch)
     http = FakeHTTP(monkeypatch, mod)
     http.get(LIST + "&page=1", 200, [pr(7, draft=True)])
@@ -175,8 +177,33 @@ def test_draft_prs_are_ignored(monkeypatch):
     behind, skipped = mod.behind_prs()
 
     assert behind == []
-    assert skipped == []
+    assert skipped == [(7, "draft")]
+    out = capsys.readouterr().out
+    assert "PR #7: skipped (draft)" in out
+    # No detail request is ever made for a draft.
     assert http.calls == [("GET", LIST + "&page=1", None)]
+
+
+def test_non_behind_states_are_reported_as_skipped(monkeypatch, capsys):
+    """clean/dirty/blocked PRs get one disposition line each with their
+    mergeable_state, and all land in the final summary (issue #367)."""
+    mod = load_script(monkeypatch)
+    http = FakeHTTP(monkeypatch, mod)
+    http.get(LIST + "&page=1", 200, [pr(7), pr(8), pr(9)])
+    http.get(f"{DETAIL}/7", 200, detail(7, "clean"))
+    http.get(f"{DETAIL}/8", 200, detail(8, "dirty"))
+    http.get(f"{DETAIL}/9", 200, detail(9, "blocked"))
+
+    mod.main()
+
+    out = capsys.readouterr().out
+    assert "PR #7: skipped (mergeable_state=clean)" in out
+    assert "PR #8: skipped (mergeable_state=dirty)" in out
+    assert "PR #9: skipped (mergeable_state=blocked)" in out
+    assert "done: 0 PR branch(es) updated" in out
+    assert "#7 (mergeable_state=clean)" in out
+    assert "#8 (mergeable_state=dirty)" in out
+    assert "#9 (mergeable_state=blocked)" in out
 
 
 def test_pr_list_failure_exits_loudly(monkeypatch):
