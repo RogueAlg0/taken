@@ -19,6 +19,7 @@ Submit with:
     wingetcreate submit --token <github-token> packaging\\winget\\<version>
 or open a manual PR against microsoft/winget-pkgs.
 """
+
 import hashlib
 import os
 import sys
