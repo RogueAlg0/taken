@@ -18,9 +18,9 @@
     },
     {
       "file": "taken/discover.py",
-      "cc": 116,
-      "commits": 26,
-      "hotspot": 3016
+      "cc": 117,
+      "commits": 27,
+      "hotspot": 3159
     },
     {
       "file": "taken/graphql.py",
