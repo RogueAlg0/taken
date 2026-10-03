@@ -225,6 +225,15 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    # Serialize concurrent dispatches for the same version: the job's
+    # check-then-act (npm view, then publish) is not atomic, so two
+    # dispatches racing would both see the version absent and both
+    # publish, with npm rejecting the loser. Queued, not cancelled, so
+    # the second dispatch still runs and exits as the intended no-op.
+    # Tag-triggered publishes are unaffected: they do not use this job.
+    concurrency:
+      group: npm-only-${{ github.event.inputs.npm_only_version }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
