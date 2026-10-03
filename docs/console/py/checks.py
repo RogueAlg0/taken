@@ -1155,6 +1155,37 @@ def _is_taken_decisive(pr_info, pr_idle_days):
     return pr_info["state"] == "open" and not (idle is not None and idle > pr_idle_days)
 
 
+def _parse_timeline_prs(batch, seen):
+    """Parse timeline events into [(pr_owner, pr_repo, pr_number)], in order."""
+    parsed_prs = []
+    for event in batch:
+        parsed = _timeline_event_pr(event, seen)
+        if parsed is not None:
+            parsed_prs.append(parsed)
+    return parsed_prs
+
+
+def _iter_timeline_pr_infos(parsed_prs):
+    """Yield one PR info dict per parsed (owner, repo, number), in order.
+
+    Linked PRs are independent fetches, so callers with more than one
+    batch worker fetch the page's PRs concurrently (issue #216); the
+    anonymous tier keeps the exact sequential behavior. Futures are
+    submitted up front and consumed in submission order, so linked-PR
+    ordering, the decisive-PR early exit, and first-error semantics are
+    identical either way.
+    """
+    workers = min(len(parsed_prs), budget.current().batch_workers)
+    if workers > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_timeline_pr_info, *p) for p in parsed_prs]
+            for future in futures:
+                yield future.result()
+    else:
+        for parsed in parsed_prs:
+            yield _timeline_pr_info(*parsed)
+
+
 def check_timeline(owner, repo, number, pr_idle_days=None):
     """Find PRs linked to the issue via timeline cross-reference events.
 
@@ -1186,42 +1217,16 @@ def check_timeline(owner, repo, number, pr_idle_days=None):
             gh_api(endpoint, {"per_page": "100", "page": str(page)}),
             endpoint,
         )
-        parsed_prs = []
-        for event in batch:
-            parsed = _timeline_event_pr(event, seen)
-            if parsed is not None:
-                parsed_prs.append(parsed)
-        # Linked PRs are independent fetches, so authenticated callers
-        # fetch the page's PRs concurrently (issue #216); the anonymous
-        # tier keeps the exact sequential behavior. Futures are submitted
-        # up front and consumed in submission order, so linked-PR
-        # ordering, the decisive-PR early exit, and first-error semantics
-        # are identical either way.
-        workers = min(len(parsed_prs), budget.current().batch_workers)
-        if workers > 1:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = [pool.submit(_timeline_pr_info, *p) for p in parsed_prs]
-                for future in futures:
-                    pr_info = future.result()
-                    linked.append(pr_info)
-                    if _is_taken_decisive(pr_info, pr_idle_days):
-                        # TAKEN-decisive: decide() reports TAKEN on this PR alone.
-                        # Note: truncated=True here is over-conservative when the
-                        # decisive PR is the last item of a short final page (the
-                        # scan was actually complete), but harmless: TAKEN outranks
-                        # the CAUTION that truncation adds in decide().
-                        return linked, True
-        else:
-            for parsed in parsed_prs:
-                pr_info = _timeline_pr_info(*parsed)
-                linked.append(pr_info)
-                if _is_taken_decisive(pr_info, pr_idle_days):
-                    # TAKEN-decisive: decide() reports TAKEN on this PR alone.
-                    # Note: truncated=True here is over-conservative when the
-                    # decisive PR is the last item of a short final page (the
-                    # scan was actually complete), but harmless: TAKEN outranks
-                    # the CAUTION that truncation adds in decide().
-                    return linked, True
+        parsed_prs = _parse_timeline_prs(batch, seen)
+        for pr_info in _iter_timeline_pr_infos(parsed_prs):
+            linked.append(pr_info)
+            if _is_taken_decisive(pr_info, pr_idle_days):
+                # TAKEN-decisive: decide() reports TAKEN on this PR alone.
+                # Note: truncated=True here is over-conservative when the
+                # decisive PR is the last item of a short final page (the
+                # scan was actually complete), but harmless: TAKEN outranks
+                # the CAUTION that truncation adds in decide().
+                return linked, True
         if len(batch) < 100:
             break
         if page == max_pages:
