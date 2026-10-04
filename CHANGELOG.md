@@ -17,6 +17,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+- MCP tool error-payload documentation now uses one shared source of truth.
+
 ## [0.7.5] - 2026-10-01
 
 ### Added

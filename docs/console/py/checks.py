@@ -497,6 +497,10 @@ def _require_list(value, endpoint):
 
 
 _CACHE_FILE_SUFFIX = ".json"
+# Legacy single-file cache name (was duplicated 3x, S1192).
+_LEGACY_CACHE_FILENAME = "api_cache.json"
+# Temp-file prefix for atomic cache writes (was duplicated 3x, S1192).
+_CACHE_TMP_PREFIX = ".cache-"
 
 
 def _cache_dir():
@@ -510,7 +514,7 @@ def _cache_dir():
 
 def _cache_path():
     """Legacy single-file cache location (kept for one migration step)."""
-    return os.path.join(_cache_dir(), "api_cache.json")
+    return os.path.join(_cache_dir(), _LEGACY_CACHE_FILENAME)
 
 
 def _cache_file(key):
@@ -677,20 +681,20 @@ def _looks_like_taken_cache(cache_dir):
                         return False
                 except OSError:
                     return False
-                if v2_name == "api_cache.json":
+                if v2_name == _LEGACY_CACHE_FILENAME:
                     return False
-                if v2_name.endswith(_CACHE_FILE_SUFFIX) or v2_name.startswith(".cache-"):
+                if v2_name.endswith(_CACHE_FILE_SUFFIX) or v2_name.startswith(_CACHE_TMP_PREFIX):
                     continue
                 return False
             has_cache_indicator = True
-        elif name == "api_cache.json":
+        elif name == _LEGACY_CACHE_FILENAME:
             try:
                 if not os.path.isfile(path) or os.path.islink(path):
                     return False
             except OSError:
                 return False
             has_cache_indicator = True
-        elif name.startswith(".cache-"):
+        elif name.startswith(_CACHE_TMP_PREFIX):
             try:
                 if not os.path.isfile(path) or os.path.islink(path):
                     return False
@@ -809,7 +813,7 @@ def _cache_write(key, data):
         path = _cache_file(key)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         # Atomic write: readers never see a half-written file.
-        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".cache-")
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=_CACHE_TMP_PREFIX)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(entry, fh)
@@ -1155,6 +1159,37 @@ def _is_taken_decisive(pr_info, pr_idle_days):
     return pr_info["state"] == "open" and not (idle is not None and idle > pr_idle_days)
 
 
+def _parse_timeline_prs(batch, seen):
+    """Parse timeline events into [(pr_owner, pr_repo, pr_number)], in order."""
+    parsed_prs = []
+    for event in batch:
+        parsed = _timeline_event_pr(event, seen)
+        if parsed is not None:
+            parsed_prs.append(parsed)
+    return parsed_prs
+
+
+def _iter_timeline_pr_infos(parsed_prs):
+    """Yield one PR info dict per parsed (owner, repo, number), in order.
+
+    Linked PRs are independent fetches, so callers with more than one
+    batch worker fetch the page's PRs concurrently (issue #216); the
+    anonymous tier keeps the exact sequential behavior. Futures are
+    submitted up front and consumed in submission order, so linked-PR
+    ordering, the decisive-PR early exit, and first-error semantics are
+    identical either way.
+    """
+    workers = min(len(parsed_prs), budget.current().batch_workers)
+    if workers > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_timeline_pr_info, *p) for p in parsed_prs]
+            for future in futures:
+                yield future.result()
+    else:
+        for parsed in parsed_prs:
+            yield _timeline_pr_info(*parsed)
+
+
 def check_timeline(owner, repo, number, pr_idle_days=None):
     """Find PRs linked to the issue via timeline cross-reference events.
 
@@ -1186,42 +1221,16 @@ def check_timeline(owner, repo, number, pr_idle_days=None):
             gh_api(endpoint, {"per_page": "100", "page": str(page)}),
             endpoint,
         )
-        parsed_prs = []
-        for event in batch:
-            parsed = _timeline_event_pr(event, seen)
-            if parsed is not None:
-                parsed_prs.append(parsed)
-        # Linked PRs are independent fetches, so authenticated callers
-        # fetch the page's PRs concurrently (issue #216); the anonymous
-        # tier keeps the exact sequential behavior. Futures are submitted
-        # up front and consumed in submission order, so linked-PR
-        # ordering, the decisive-PR early exit, and first-error semantics
-        # are identical either way.
-        workers = min(len(parsed_prs), budget.current().batch_workers)
-        if workers > 1:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = [pool.submit(_timeline_pr_info, *p) for p in parsed_prs]
-                for future in futures:
-                    pr_info = future.result()
-                    linked.append(pr_info)
-                    if _is_taken_decisive(pr_info, pr_idle_days):
-                        # TAKEN-decisive: decide() reports TAKEN on this PR alone.
-                        # Note: truncated=True here is over-conservative when the
-                        # decisive PR is the last item of a short final page (the
-                        # scan was actually complete), but harmless: TAKEN outranks
-                        # the CAUTION that truncation adds in decide().
-                        return linked, True
-        else:
-            for parsed in parsed_prs:
-                pr_info = _timeline_pr_info(*parsed)
-                linked.append(pr_info)
-                if _is_taken_decisive(pr_info, pr_idle_days):
-                    # TAKEN-decisive: decide() reports TAKEN on this PR alone.
-                    # Note: truncated=True here is over-conservative when the
-                    # decisive PR is the last item of a short final page (the
-                    # scan was actually complete), but harmless: TAKEN outranks
-                    # the CAUTION that truncation adds in decide().
-                    return linked, True
+        parsed_prs = _parse_timeline_prs(batch, seen)
+        for pr_info in _iter_timeline_pr_infos(parsed_prs):
+            linked.append(pr_info)
+            if _is_taken_decisive(pr_info, pr_idle_days):
+                # TAKEN-decisive: decide() reports TAKEN on this PR alone.
+                # Note: truncated=True here is over-conservative when the
+                # decisive PR is the last item of a short final page (the
+                # scan was actually complete), but harmless: TAKEN outranks
+                # the CAUTION that truncation adds in decide().
+                return linked, True
         if len(batch) < 100:
             break
         if page == max_pages:
@@ -1499,8 +1508,9 @@ def _repo_push_info(owner, repo, window_days=HEALTH_WINDOW_DAYS):
     pushed_at = data.get("pushed_at") or ""
     pushed_recently = False
     if pushed_at:
-        pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", _UTC_SUFFIX))
-        pushed_recently = datetime.now(timezone.utc) - pushed_dt <= timedelta(days=window_days)
+        pushed_dt = _parse_ts(pushed_at)
+        if pushed_dt is not None:
+            pushed_recently = datetime.now(timezone.utc) - pushed_dt <= timedelta(days=window_days)
     return pushed_at, pushed_recently
 
 
@@ -1513,6 +1523,19 @@ def _page_stale(prs, cutoff):
     """
     oldest_updated = _parse_ts(prs[-1].get("updated_at"))
     return oldest_updated is not None and oldest_updated < cutoff
+
+
+def _count_page_merges(prs, cutoff):
+    """Count PRs in one pulls page merged since `cutoff`."""
+    count = 0
+    for pr in prs:
+        merged_at = pr.get("merged_at")
+        if not merged_at:
+            continue
+        merged_dt = _parse_ts(merged_at)
+        if merged_dt is not None and merged_dt >= cutoff:
+            count += 1
+    return count
 
 
 def _repo_recent_merges(owner, repo, cutoff, pulls_pages):
@@ -1544,13 +1567,7 @@ def _repo_recent_merges(owner, repo, cutoff, pulls_pages):
         )
         if not prs:
             break
-        for pr in prs:
-            merged_at = pr.get("merged_at")
-            if not merged_at:
-                continue
-            merged_dt = datetime.fromisoformat(merged_at.replace("Z", _UTC_SUFFIX))
-            if merged_dt >= cutoff:
-                recent_merges += 1
+        recent_merges += _count_page_merges(prs, cutoff)
         if len(prs) < 50:
             break
         if _page_stale(prs, cutoff):

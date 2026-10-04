@@ -596,7 +596,9 @@ def _pushed_recency(repository, window_days):
     pushed_at = repository.get("pushedAt") or ""
     if not pushed_at:
         return pushed_at, False
-    pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", _UTC_SUFFIX))
+    pushed_dt = checks._parse_ts(pushed_at)
+    if pushed_dt is None:
+        return pushed_at, False
     recent = datetime.now(timezone.utc) - pushed_dt <= timedelta(days=window_days)
     return pushed_at, recent
 
@@ -608,8 +610,8 @@ def _count_recent_merges(repository, cutoff):
         merged_at = pr.get("mergedAt")
         if not merged_at:
             continue
-        merged_dt = datetime.fromisoformat(merged_at.replace("Z", _UTC_SUFFIX))
-        if merged_dt >= cutoff:
+        merged_dt = checks._parse_ts(merged_at)
+        if merged_dt is not None and merged_dt >= cutoff:
             recent_merges += 1
     return recent_merges
 
@@ -898,7 +900,7 @@ def _oldest_merged_at(merged):
     if not nodes:
         return datetime.min.replace(tzinfo=timezone.utc)
     last = nodes[-1].get("mergedAt") or ""
-    try:
-        return datetime.fromisoformat(last.replace("Z", _UTC_SUFFIX))
-    except ValueError:
-        return datetime.min.replace(tzinfo=timezone.utc)
+    dt = checks._parse_ts(last)
+    if dt is not None:
+        return dt
+    return datetime.min.replace(tzinfo=timezone.utc)
