@@ -61,8 +61,9 @@ def test_recency_submit_raise_keeps_candidate_queued():
 
 def test_recency_failed_submit_retries_same_candidate():
     verifier = make_verifier(allocation="recency")
+    failing_pool = ExplodingPool()
     with pytest.raises(RuntimeError):
-        verifier.submit_next(ExplodingPool())
+        verifier.submit_next(failing_pool)
     pool = WorkingPool()
     verifier.submit_next(pool)
     # The restored index is submitted first, preserving queue order.
@@ -85,8 +86,9 @@ def test_bandit_submit_raise_restores_repo_queue():
     verifier = make_verifier(n=2, allocation="bandit")
     repo_key = ("octo", "repo")
     assert list(verifier.repo_queues[repo_key]) == [0, 1]
+    pool = ExplodingPool()
     with pytest.raises(RuntimeError, match="shutdown"):
-        verifier.submit_next(ExplodingPool())
+        verifier.submit_next(pool)
     assert list(verifier.repo_queues[repo_key]) == [0, 1]
     assert verifier.has_work()
     assert verifier.in_flight == {}
@@ -95,8 +97,9 @@ def test_bandit_submit_raise_restores_repo_queue():
 
 def test_bandit_failed_submit_retries_same_candidate():
     verifier = make_verifier(n=2, allocation="bandit")
+    failing_pool = ExplodingPool()
     with pytest.raises(RuntimeError):
-        verifier.submit_next(ExplodingPool())
+        verifier.submit_next(failing_pool)
     pool = WorkingPool()
     verifier.submit_next(pool)
     assert verifier.in_flight[pool.submitted[0][2]] == 0
