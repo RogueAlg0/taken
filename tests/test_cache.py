@@ -439,3 +439,74 @@ def test_identity_lookup_memoized(monkeypatch, tmp_path):
     checks.gh_api("repos/octo/repo")
     identity_calls = [c for c in calls if c[:3] == ["gh", "api", "user"]]
     assert len(identity_calls) == 1
+
+
+def _raise_oserror(path):
+    raise OSError("permission denied")
+
+
+def test_list_dir_returns_none_when_isdir_raises(monkeypatch):
+    """_list_dir must fail closed when os.path.isdir raises."""
+    import os
+
+    monkeypatch.setattr(os.path, "isdir", _raise_oserror)
+    assert checks._list_dir("/whatever") is None
+
+
+def test_list_dir_returns_none_when_listdir_raises(monkeypatch, tmp_path):
+    """_list_dir must fail closed when os.listdir raises."""
+    import os
+
+    monkeypatch.setattr(os.path, "isdir", lambda p: True)
+    monkeypatch.setattr(os, "listdir", _raise_oserror)
+    assert checks._list_dir(str(tmp_path)) is None
+
+
+def test_is_plain_file_returns_false_when_isfile_raises(monkeypatch):
+    """_is_plain_file must fail closed when os.path.isfile raises."""
+    import os
+
+    monkeypatch.setattr(os.path, "isfile", _raise_oserror)
+    assert checks._is_plain_file("/whatever") is False
+
+
+def test_v2_entry_ok_returns_false_when_isdir_raises(monkeypatch):
+    """_v2_entry_ok must fail closed when os.path.isdir raises."""
+    import os
+
+    monkeypatch.setattr(os.path, "isdir", _raise_oserror)
+    assert checks._v2_entry_ok("/whatever/x.json", "x.json") is False
+
+
+def test_looks_like_taken_cache_accepts_valid_v2(tmp_path):
+    v2 = tmp_path / "v2"
+    v2.mkdir()
+    (v2 / "abc123.json").write_text("{}")
+    assert checks._looks_like_taken_cache(str(tmp_path)) is True
+
+
+def test_looks_like_taken_cache_accepts_v2_tmp_file(tmp_path):
+    """Temp files from atomic writes are tolerated inside v2/."""
+    v2 = tmp_path / "v2"
+    v2.mkdir()
+    (v2 / ".cache-abc123").write_text("{}")
+    assert checks._looks_like_taken_cache(str(tmp_path)) is True
+
+
+def test_looks_like_taken_cache_accepts_legacy_file(tmp_path):
+    (tmp_path / "api_cache.json").write_text("{}")
+    assert checks._looks_like_taken_cache(str(tmp_path)) is True
+
+
+def test_looks_like_taken_cache_rejects_tmp_only_dir(tmp_path):
+    """Temp files are tolerated but do not count as a cache indicator."""
+    (tmp_path / ".cache-abc123").write_text("{}")
+    assert checks._looks_like_taken_cache(str(tmp_path)) is False
+
+
+def test_looks_like_taken_cache_rejects_v2_with_stray_file(tmp_path):
+    v2 = tmp_path / "v2"
+    v2.mkdir()
+    (v2 / "abc123.json").write_text("{}")
+    (v2 / "notes.txt").write_text("x")
+    assert checks._looks_like_taken_cache(str(tmp_path)) is False
