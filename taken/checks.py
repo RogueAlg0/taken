@@ -640,6 +640,64 @@ _PROTECTED_ROOTS = {
 }
 
 
+def _list_dir(path):
+    """List a real directory's entries, or None if it is not listable.
+
+    Symlinks never qualify, and any OSError (missing dir, permission
+    denied, listdir failure) yields None instead of raising.
+    """
+    try:
+        if not os.path.isdir(path) or os.path.islink(path):
+            return None
+        return os.listdir(path)
+    except OSError:
+        return None
+
+
+def _is_plain_file(path):
+    """True if path is a regular file and not a symlink (OSError -> False)."""
+    try:
+        return os.path.isfile(path) and not os.path.islink(path)
+    except OSError:
+        return False
+
+
+def _v2_entry_ok(v2_path, v2_name):
+    """True if one v2/ entry is an acceptable taken cache artifact."""
+    try:
+        if os.path.isdir(v2_path) or os.path.islink(v2_path):
+            return False
+    except OSError:
+        return False
+    if v2_name == _LEGACY_CACHE_FILENAME:
+        return False
+    return v2_name.endswith(_CACHE_FILE_SUFFIX) or v2_name.startswith(_CACHE_TMP_PREFIX)
+
+
+def _v2_dir_ok(path):
+    """True if path is a listable v2 dir with only acceptable entries."""
+    entries = _list_dir(path)
+    return entries is not None and all(
+        _v2_entry_ok(os.path.join(path, name), name) for name in entries
+    )
+
+
+def _root_entry_status(name, path):
+    """Classify one cache-dir root entry.
+
+    Returns "indicator" for a cache artifact proving a taken cache,
+    "tolerated" for an allowed temp file, or None when the entry
+    disqualifies the directory.
+    """
+    if name == "v2":
+        return "indicator" if _v2_dir_ok(path) else None
+    if name == _LEGACY_CACHE_FILENAME:
+        return "indicator" if _is_plain_file(path) else None
+    if name.startswith(_CACHE_TMP_PREFIX):
+        return "tolerated" if _is_plain_file(path) else None
+    return None
+
+
 def _looks_like_taken_cache(cache_dir):
     """Return True if cache_dir matches the exact taken cache structure.
 
@@ -653,57 +711,19 @@ def _looks_like_taken_cache(cache_dir):
     directory. An arbitrary empty directory without taken cache artifacts
     does not qualify.
     """
-    try:
-        if not os.path.isdir(cache_dir) or os.path.islink(cache_dir):
-            return False
-        root_entries = os.listdir(cache_dir)
-    except OSError:
-        return False
-
+    root_entries = _list_dir(cache_dir)
     if not root_entries:
         return False
 
-    has_cache_indicator = False
-
+    indicators = 0
     for name in root_entries:
-        path = os.path.join(cache_dir, name)
-        if name == "v2":
-            try:
-                if not os.path.isdir(path) or os.path.islink(path):
-                    return False
-                v2_entries = os.listdir(path)
-            except OSError:
-                return False
-            for v2_name in v2_entries:
-                v2_path = os.path.join(path, v2_name)
-                try:
-                    if os.path.isdir(v2_path) or os.path.islink(v2_path):
-                        return False
-                except OSError:
-                    return False
-                if v2_name == _LEGACY_CACHE_FILENAME:
-                    return False
-                if v2_name.endswith(_CACHE_FILE_SUFFIX) or v2_name.startswith(_CACHE_TMP_PREFIX):
-                    continue
-                return False
-            has_cache_indicator = True
-        elif name == _LEGACY_CACHE_FILENAME:
-            try:
-                if not os.path.isfile(path) or os.path.islink(path):
-                    return False
-            except OSError:
-                return False
-            has_cache_indicator = True
-        elif name.startswith(_CACHE_TMP_PREFIX):
-            try:
-                if not os.path.isfile(path) or os.path.islink(path):
-                    return False
-            except OSError:
-                return False
-        else:
+        status = _root_entry_status(name, os.path.join(cache_dir, name))
+        if status is None:
             return False
+        if status == "indicator":
+            indicators += 1
 
-    return has_cache_indicator
+    return indicators > 0
 
 
 def _is_cache_dir_safe(cache_dir):
