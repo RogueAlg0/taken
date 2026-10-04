@@ -32,6 +32,16 @@ except ImportError:  # pydantic ships with the `mcp` dependency
 from taken import __version__, budget, checks, discover, graphql
 from taken.verdict import decide
 
+_ERROR_PAYLOAD_DOCS = """Error payloads carry `error` plus `error_code`: RateLimitError ->
+`rate_limited`, NotFoundError -> `not_found`, HTTP 401/CLI authentication
+failures -> `auth_failed`, subprocess timeouts -> `timeout`, other
+TakenError failures -> `unknown`."""
+
+
+def _expand_error_payload_docs(function):
+    function.__doc__ = function.__doc__.replace("__ERROR_PAYLOAD_DOCS__", _ERROR_PAYLOAD_DOCS)
+    return function
+
 
 def _check_one(
     owner, repo, number, me=None, mode=None, payload=None, session=None, thresholds=None
@@ -134,6 +144,7 @@ def _decay_thresholds(pr_idle_days=None, claim_silence_days=None, claim_silence_
     }
 
 
+@_expand_error_payload_docs
 def check_issue(
     owner: str,
     repo: str,
@@ -182,10 +193,7 @@ def check_issue(
     labels on the issue) and `welcoming` (repo-level signs contributions
     are welcome), the same markers `scan_repo` returns.
 
-    Error payloads carry `error` plus `error_code`: RateLimitError ->
-    `rate_limited`, NotFoundError -> `not_found`, HTTP 401/CLI authentication
-    failures -> `auth_failed`, subprocess timeouts -> `timeout`, other
-    TakenError failures -> `unknown`.
+    __ERROR_PAYLOAD_DOCS__
 
     Args:
         owner: repository owner login
@@ -214,6 +222,7 @@ def check_issue(
         return {"target": f"{owner}/{repo}#{issue_number}", **_error_payload(exc)}
 
 
+@_expand_error_payload_docs
 def scan_repo(
     owner: str,
     repo: str,
@@ -259,10 +268,7 @@ def scan_repo(
     `welcoming` (repo-level signs contributions are welcome), so an agent
     can prefer the safest issues to adopt.
 
-    Error payloads carry `error` plus `error_code`: RateLimitError ->
-    `rate_limited`, NotFoundError -> `not_found`, HTTP 401/CLI authentication
-    failures -> `auth_failed`, subprocess timeouts -> `timeout`, other
-    TakenError failures -> `unknown`.
+    __ERROR_PAYLOAD_DOCS__
 
     Args:
         owner: repository owner login
@@ -345,6 +351,7 @@ def scan_repo(
     }
 
 
+@_expand_error_payload_docs
 def discover_candidates(
     limit: Annotated[int, Field(description="Max candidates to return. Default: 10.")] = 10,
     language: Annotated[
@@ -400,10 +407,7 @@ def discover_candidates(
     carries `friendly_labels` (first-time-contributor labels on the issue)
     and `welcoming` (repo-level signs contributions are welcome).
 
-    Error payloads carry `error` plus `error_code`: RateLimitError ->
-    `rate_limited`, NotFoundError -> `not_found`, HTTP 401/CLI authentication
-    failures -> `auth_failed`, subprocess timeouts -> `timeout`, other
-    TakenError failures -> `unknown`.
+    __ERROR_PAYLOAD_DOCS__
 
     Args:
         limit: max candidates to return (default 10)

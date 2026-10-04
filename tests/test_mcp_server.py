@@ -130,6 +130,17 @@ def test_server_registers_three_tools():
     assert discover_properties["claim_silence_complex_days"]["default"] is None
 
 
+def test_server_tool_descriptions_expand_shared_error_docs():
+    async def go():
+        return await mcp.list_tools()
+
+    descriptions = {tool.name: tool.description for tool in asyncio.run(go())}
+    for name in ("check_issue", "scan_repo", "discover_candidates"):
+        assert descriptions[name] == getattr(mcp_server, name).__doc__
+        assert descriptions[name].count(mcp_server._ERROR_PAYLOAD_DOCS) == 1
+        assert "__ERROR_PAYLOAD_DOCS__" not in descriptions[name]
+
+
 def test_check_issue_and_scan_repo_expose_decay_thresholds_in_schema():
     # Issue #366: check_issue and scan_repo offer the same stale-claim
     # decay knobs as discover_candidates, all optional, so old clients
