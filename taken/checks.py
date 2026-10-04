@@ -497,6 +497,10 @@ def _require_list(value, endpoint):
 
 
 _CACHE_FILE_SUFFIX = ".json"
+# Legacy single-file cache name (was duplicated 3x, S1192).
+_LEGACY_CACHE_FILENAME = "api_cache.json"
+# Temp-file prefix for atomic cache writes (was duplicated 3x, S1192).
+_CACHE_TMP_PREFIX = ".cache-"
 
 
 def _cache_dir():
@@ -510,7 +514,7 @@ def _cache_dir():
 
 def _cache_path():
     """Legacy single-file cache location (kept for one migration step)."""
-    return os.path.join(_cache_dir(), "api_cache.json")
+    return os.path.join(_cache_dir(), _LEGACY_CACHE_FILENAME)
 
 
 def _cache_file(key):
@@ -677,20 +681,20 @@ def _looks_like_taken_cache(cache_dir):
                         return False
                 except OSError:
                     return False
-                if v2_name == "api_cache.json":
+                if v2_name == _LEGACY_CACHE_FILENAME:
                     return False
-                if v2_name.endswith(_CACHE_FILE_SUFFIX) or v2_name.startswith(".cache-"):
+                if v2_name.endswith(_CACHE_FILE_SUFFIX) or v2_name.startswith(_CACHE_TMP_PREFIX):
                     continue
                 return False
             has_cache_indicator = True
-        elif name == "api_cache.json":
+        elif name == _LEGACY_CACHE_FILENAME:
             try:
                 if not os.path.isfile(path) or os.path.islink(path):
                     return False
             except OSError:
                 return False
             has_cache_indicator = True
-        elif name.startswith(".cache-"):
+        elif name.startswith(_CACHE_TMP_PREFIX):
             try:
                 if not os.path.isfile(path) or os.path.islink(path):
                     return False
@@ -809,7 +813,7 @@ def _cache_write(key, data):
         path = _cache_file(key)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         # Atomic write: readers never see a half-written file.
-        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".cache-")
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=_CACHE_TMP_PREFIX)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(entry, fh)
