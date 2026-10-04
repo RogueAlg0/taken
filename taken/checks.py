@@ -1521,6 +1521,19 @@ def _page_stale(prs, cutoff):
     return oldest_updated is not None and oldest_updated < cutoff
 
 
+def _count_page_merges(prs, cutoff):
+    """Count PRs in one pulls page merged since `cutoff`."""
+    count = 0
+    for pr in prs:
+        merged_at = pr.get("merged_at")
+        if not merged_at:
+            continue
+        merged_dt = _parse_ts(merged_at)
+        if merged_dt is not None and merged_dt >= cutoff:
+            count += 1
+    return count
+
+
 def _repo_recent_merges(owner, repo, cutoff, pulls_pages):
     """Count PRs merged since `cutoff`.
 
@@ -1550,13 +1563,7 @@ def _repo_recent_merges(owner, repo, cutoff, pulls_pages):
         )
         if not prs:
             break
-        for pr in prs:
-            merged_at = pr.get("merged_at")
-            if not merged_at:
-                continue
-            merged_dt = _parse_ts(merged_at)
-            if merged_dt is not None and merged_dt >= cutoff:
-                recent_merges += 1
+        recent_merges += _count_page_merges(prs, cutoff)
         if len(prs) < 50:
             break
         if _page_stale(prs, cutoff):
