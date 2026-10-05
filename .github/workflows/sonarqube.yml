@@ -38,4 +38,4 @@ jobs:
         run: uv run --frozen --with pytest-cov pytest --cov=taken --cov-report=xml
       - name: SonarQube Cloud scan
         if: env.SONAR_TOKEN != ''
-        uses: sonarsource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4 # v8
+        uses: sonarsource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8
