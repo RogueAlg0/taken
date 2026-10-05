@@ -13,8 +13,8 @@
     {
       "file": "taken/cli.py",
       "cc": 137,
-      "commits": 38,
-      "hotspot": 5206
+      "commits": 39,
+      "hotspot": 5343
     },
     {
       "file": "taken/graphql.py",
