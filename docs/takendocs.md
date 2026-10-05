@@ -24,8 +24,8 @@ options:
   -h, --help            show this help message and exit
   --file PATH           read targets from a file, one per line (blank lines
                         and # comments ignored)
-  --limit N             max open issues to check per owner/repo scan target
-                        (default: 20)
+  --limit N             max open issues to check per scan target, or max
+                        candidates to return in --discover mode (default: 20)
   --label LABEL         scan mode: only consider open issues carrying this
                         label
   --discover            discover top candidates via GitHub issue search,
