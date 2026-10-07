@@ -398,12 +398,12 @@ def test_discover_negative_limit_yields_empty_not_truncated(monkeypatch):
     assert results.total == 2
 
 
-def test_discover_cli_negative_limit_reports_empty_honestly(monkeypatch, capsys):
-    items = [search_item(1, 1), search_item(2, 2)]
-    monkeypatch.setattr(checks, "gh_api", make_fake(items, {1: "go", 2: "go"}, {}))
-    assert main(["--discover", "--label", "good first issue", "--limit", "-1"]) == 0
-    err = capsys.readouterr().err
-    assert "no candidates passed verification" in err
+def test_discover_cli_rejects_negative_limit(capsys):
+    # A negative --limit used to exit 0 with "no candidates" (issue #339).
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--discover", "--label", "good first issue", "--limit", "-1"])
+    assert exc_info.value.code == 2
+    assert "argument --limit: must be non-negative" in capsys.readouterr().err
 
 
 def test_maintainer_engaged_ignores_me_case_insensitively():
