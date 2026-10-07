@@ -54,6 +54,13 @@ def _non_negative_int(value):
     return number
 
 
+def _probability(value):
+    number = float(value)
+    if not 0.0 <= number <= 1.0:
+        raise argparse.ArgumentTypeError("must be between 0 and 1")
+    return number
+
+
 def build_parser():
     """Build and return the argument parser for the taken CLI.
 
@@ -80,7 +87,7 @@ def build_parser():
     )
     parser.add_argument(
         "--limit",
-        type=int,
+        type=_non_negative_int,
         default=20,
         metavar="N",
         help=(
@@ -107,7 +114,7 @@ def build_parser():
     )
     parser.add_argument(
         "--min-contributors",
-        type=int,
+        type=_non_negative_int,
         default=0,
         metavar="N",
         help="discover: only consider repos with at least N contributors in the last 90 days",
@@ -135,7 +142,7 @@ def build_parser():
     )
     parser.add_argument(
         "--explore-floor",
-        type=float,
+        type=_probability,
         default=0.15,
         metavar="P",
         help="discover: probability a bandit pick explores uniformly "

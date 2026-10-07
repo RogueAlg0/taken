@@ -17,6 +17,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Numeric inputs are now range-checked at the boundary: `--limit` and
+  `--min-contributors` reject negative values, `--explore-floor` must be
+  between 0 and 1, and the MCP tools reject negative `limit`,
+  `min_contributors`, and stale-claim decay values instead of returning an
+  empty result (#339).
+
 ### Changed
 - MCP tool error-payload documentation now uses one shared source of truth.
 

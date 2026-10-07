@@ -164,22 +164,25 @@ def check_issue(
     pr_idle_days: Annotated[
         int | None,
         Field(
+            ge=0,
             description="Stale-claim decay: days of linked-PR inactivity before "
-            "TAKEN weakens to CAUTION. Default: 90."
+            "TAKEN weakens to CAUTION. Default: 90.",
         ),
     ] = None,
     claim_silence_days: Annotated[
         int | None,
         Field(
+            ge=0,
             description="Stale-claim decay: days one claim blocks as CAUTION on a "
-            "simple issue; the clock resets on claimant activity. Default: 7."
+            "simple issue; the clock resets on claimant activity. Default: 7.",
         ),
     ] = None,
     claim_silence_complex_days: Annotated[
         int | None,
         Field(
+            ge=0,
             description="Stale-claim decay: days one claim blocks as CAUTION on a "
-            "complex issue. Default: 14."
+            "complex issue. Default: 14.",
         ),
     ] = None,
 ) -> dict:
@@ -226,7 +229,7 @@ def check_issue(
 def scan_repo(
     owner: str,
     repo: str,
-    limit: Annotated[int, Field(description="Max open issues to check. Default: 20.")] = 20,
+    limit: Annotated[int, Field(ge=0, description="Max open issues to check. Default: 20.")] = 20,
     label: Annotated[
         str | None,
         Field(
@@ -240,22 +243,25 @@ def scan_repo(
     pr_idle_days: Annotated[
         int | None,
         Field(
+            ge=0,
             description="Stale-claim decay: days of linked-PR inactivity before "
-            "TAKEN weakens to CAUTION. Default: 90."
+            "TAKEN weakens to CAUTION. Default: 90.",
         ),
     ] = None,
     claim_silence_days: Annotated[
         int | None,
         Field(
+            ge=0,
             description="Stale-claim decay: days one claim blocks as CAUTION on a "
-            "simple issue; the clock resets on claimant activity. Default: 7."
+            "simple issue; the clock resets on claimant activity. Default: 7.",
         ),
     ] = None,
     claim_silence_complex_days: Annotated[
         int | None,
         Field(
+            ge=0,
             description="Stale-claim decay: days one claim blocks as CAUTION on a "
-            "complex issue. Default: 14."
+            "complex issue. Default: 14.",
         ),
     ] = None,
 ) -> dict:
@@ -353,7 +359,7 @@ def scan_repo(
 
 @_expand_error_payload_docs
 def discover_candidates(
-    limit: Annotated[int, Field(description="Max candidates to return. Default: 10.")] = 10,
+    limit: Annotated[int, Field(ge=0, description="Max candidates to return. Default: 10.")] = 10,
     language: Annotated[
         str | None,
         Field(
@@ -370,8 +376,9 @@ def discover_candidates(
     min_contributors: Annotated[
         int,
         Field(
+            ge=0,
             description="Only consider repositories with at least this many "
-            "contributors in the last 90 days. Default: 0."
+            "contributors in the last 90 days. Default: 0.",
         ),
     ] = 0,
     me: Annotated[
@@ -381,22 +388,25 @@ def discover_candidates(
     pr_idle_days: Annotated[
         int | None,
         Field(
+            ge=0,
             description="Stale-claim decay: days of linked-PR inactivity before "
-            "TAKEN weakens to CAUTION. Default: 90."
+            "TAKEN weakens to CAUTION. Default: 90.",
         ),
     ] = None,
     claim_silence_days: Annotated[
         int | None,
         Field(
+            ge=0,
             description="Stale-claim decay: days one claim blocks as CAUTION on a "
-            "simple issue; the clock resets on claimant activity. Default: 7."
+            "simple issue; the clock resets on claimant activity. Default: 7.",
         ),
     ] = None,
     claim_silence_complex_days: Annotated[
         int | None,
         Field(
+            ge=0,
             description="Stale-claim decay: days one claim blocks as CAUTION on a "
-            "complex issue. Default: 14."
+            "complex issue. Default: 14.",
         ),
     ] = None,
 ) -> dict:
