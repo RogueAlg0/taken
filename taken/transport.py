@@ -191,7 +191,7 @@ def _close_client():
 def _broker_entry_fn():
     """Return dynamic_credential_entry, or None when the broker is absent."""
     try:
-        from dynamic_credentials import dynamic_credential_entry
+        from dynamic_credentials import dynamic_credential_entry  # type: ignore[import-not-found]
 
         return dynamic_credential_entry
     except ImportError:
@@ -200,7 +200,9 @@ def _broker_entry_fn():
         # Same well-known broker path the project's own `gh` shim uses.
         sys.path.insert(0, _CREDENTIAL_BROKER_DIR)
         try:
-            from dynamic_credentials import dynamic_credential_entry
+            from dynamic_credentials import (
+                dynamic_credential_entry,
+            )
 
             return dynamic_credential_entry
         except ImportError:
@@ -256,7 +258,7 @@ def _load_throttle():
         return _throttle_fn
     _throttle_checked = True
     try:
-        from gh_throttle import throttle
+        from gh_throttle import throttle  # type: ignore[import-not-found]
 
         _throttle_fn = throttle
         return _throttle_fn
