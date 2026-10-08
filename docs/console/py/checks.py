@@ -1,7 +1,10 @@
 """Read-only GitHub checks used by taken.
 
-All access goes through the `gh` CLI, so the tool uses the invoker's own
-authentication and never sees, stores, or handles any token.
+REST access goes through the `gh` CLI by default (TAKEN_TRANSPORT=httpx
+selects the in-process httpx transport instead), so the tool uses the
+invoker's own authentication and never sees, stores, or handles any raw
+token: the httpx path authenticates with an in-process surrogate that the
+egress proxy swaps for the real credential.
 """
 
 import base64
@@ -19,7 +22,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from taken import budget
+from taken import budget, transport
 from taken.verdict import FIRST_TIME_LABELS, TAKEN, age_phrase, decide
 
 API_TIMEOUT = 60
@@ -147,7 +150,7 @@ def reset_api_stats() -> None:
 
 
 def record_api_call(endpoint: str) -> None:
-    """Count one real `gh api` subprocess call against an endpoint."""
+    """Count one real GitHub REST call against an endpoint."""
     with _API_STATS_LOCK:
         calls = _API_STATS["calls"]
         calls[endpoint] = calls.get(endpoint, 0) + 1
@@ -994,9 +997,17 @@ def _gh_api_run(cmd, endpoint, paced):
 
 
 def gh_api(endpoint, params=None):
-    """GET a GitHub API endpoint via `gh api` and return parsed JSON."""
+    """GET a GitHub API endpoint and return parsed JSON.
+
+    The transport is selected by TAKEN_TRANSPORT: "httpx" uses the
+    persistent in-process client (taken/transport.py); anything else uses
+    one `gh api` subprocess per call, the historical path and the default
+    until the httpx soak completes. The httpx path falls back to the
+    subprocess path when no credential is available, so environments
+    without auth keep working unchanged.
+    """
     # Normalize before validating: the allowlist must see exactly the string
-    # that reaches subprocess. Stripping first also closes the theoretical
+    # that reaches the transport. Stripping first also closes the theoretical
     # "/-" edge where a leading slash could hide a leading dash.
     endpoint = endpoint.lstrip("/") if isinstance(endpoint, str) else endpoint
     _require_safe_endpoint(endpoint)
@@ -1009,6 +1020,28 @@ def gh_api(endpoint, params=None):
             record_cache_result(True)
             return cached
         record_cache_result(False)
+    if endpoint.startswith("search/"):
+        # Search pacing: hold the lock through the pace wait AND the entire
+        # retry loop, so parallel discover workers and retry bursts can never
+        # have two search requests in flight at once. Non-search endpoints
+        # never touch this lock and stay fully parallel.
+        with _search_lock:
+            data = _rest_get(endpoint, params, paced=True)
+    else:
+        data = _rest_get(endpoint, params, paced=False)
+    if _CACHE_ENABLED:
+        _cache_write(key, data)
+    return data
+
+
+def _rest_get(endpoint, params, paced):
+    """Dispatch one REST GET to the selected transport."""
+    if transport.use_httpx():
+        try:
+            return _gh_api_run_httpx(endpoint, params, paced)
+        except transport.TransportAuthError:
+            # No credential for the httpx path: degraded, not dead.
+            pass
     cmd = ["gh", "api", "--method", "GET", endpoint]
     # Pin the method explicitly: stock `gh` switches to POST whenever -f
     # parameters are added, which would turn reads into writes (e.g. POST
@@ -1016,18 +1049,131 @@ def gh_api(endpoint, params=None):
     # builds its own command and intentionally keeps the auto-POST.
     for key_param, value in (params or {}).items():
         cmd.extend(["-f", f"{key_param}={value}"])
-    if endpoint.startswith("search/"):
-        # Search pacing: hold the lock through the pace wait AND the entire
-        # retry loop, so parallel discover workers and retry bursts can never
-        # have two search subprocesses in flight at once. Non-search
-        # endpoints never touch this lock and stay fully parallel.
-        with _search_lock:
-            data = _gh_api_run(cmd, endpoint, paced=True)
-    else:
-        data = _gh_api_run(cmd, endpoint, paced=False)
-    if _CACHE_ENABLED:
-        _cache_write(key, data)
+    return _gh_api_run(cmd, endpoint, paced=paced)
+
+
+def _gh_api_run_httpx(endpoint, params, paced):
+    """Run one httpx GET through the retry loop; return parsed JSON.
+
+    Mirrors _gh_api_run's policy: the same endpoint allowlist check at the
+    boundary, the same search pacing/lock discipline (the caller holds
+    _search_lock for search endpoints), the same retry budget, backoff, and
+    error types. Only the attempt mechanism differs (in-process httpx
+    instead of a `gh api` subprocess), so Retry-After comes from the
+    response header rather than parsed stderr text.
+    """
+    # Defense in depth, same as _gh_api_run: re-validate at the boundary.
+    _require_safe_endpoint(endpoint)
+    attempt = 0
+    while True:
+        if paced:
+            _wait_search_pace()
+        try:
+            record_api_call(endpoint)
+            rest_start = time.perf_counter()
+            status, body, headers = transport.api_get(endpoint, params, API_TIMEOUT)
+            record_phase("rest", time.perf_counter() - rest_start)
+        except transport.TransportAuthError:
+            raise
+        except transport.TransportTimeout:
+            raise TakenError(f"`gh api {endpoint}` timed out after {API_TIMEOUT}s") from None
+        except transport.TransportRateLimited as exc:
+            raise RateLimitError(
+                _http_rate_limit_message(endpoint, reset_epoch=exc.reset_epoch)
+            ) from None
+        except transport.TransportError as exc:
+            raise TakenError(f"`gh api {endpoint}` failed: {exc}") from None
+        if status == 200:
+            break
+        attempt = _http_maybe_retry(endpoint, status, body, headers, attempt)
+    record_bytes(len(body.encode("utf-8")))
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        raise TakenError(f"`gh api {endpoint}` did not return JSON") from None
     return data
+
+
+def _is_http_rate_limited(status, body, headers):
+    """Detect rate-limit signals in an httpx response (HTTP 429 / 403)."""
+    if status == 429:
+        return True
+    if status != 403:
+        return False
+    if headers.get("x-ratelimit-remaining") == "0":
+        return True
+    lowered = (body or "").lower()
+    return "rate limit" in lowered or "too many requests" in lowered
+
+
+def _http_backoff(headers, attempt):
+    """Sleep with jittered exponential backoff before the next httpx retry.
+
+    Mirrors _gh_api_backoff: the Retry-After response header is honored
+    when present (capped so a huge value cannot hang the CLI); otherwise
+    exponential backoff with jitter keeps parallel discover workers from
+    retrying in lockstep.
+    """
+    delay = None
+    raw = (headers or {}).get("retry-after")
+    if raw is not None:
+        try:
+            delay = max(0.0, min(float(raw), MAX_RETRY_AFTER_DELAY))
+        except (TypeError, ValueError):
+            delay = None
+    if delay is None:
+        delay = RETRY_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+    record_retry(delay)
+    time.sleep(delay)
+
+
+def _http_rate_limit_message(endpoint, reset_epoch=None, secondary=False):
+    """Rate-limit message for the httpx path, mirroring _rate_limit_message."""
+    if secondary:
+        return (
+            f"GitHub API secondary rate limit hit for `gh api {endpoint}`. "
+            "GitHub asks clients to wait a few minutes before retrying; this "
+            "limit is not shown by `gh api rate_limit`. "
+            "No verdict was recorded."
+        )
+    when = " Check `gh api rate_limit` for the reset time."
+    if reset_epoch:
+        try:
+            reset_at = datetime.fromtimestamp(reset_epoch, tz=timezone.utc)
+            when = f" Rate limit resets {reset_at:%Y-%m-%d %H:%M} UTC."
+        except (OverflowError, OSError, ValueError):
+            pass
+    return (
+        f"GitHub API rate limit exceeded for `gh api {endpoint}`.{when} "
+        "No verdict was recorded: wait for the reset instead of retrying."
+    )
+
+
+def _http_maybe_retry(endpoint, status, body, headers, attempt):
+    """Handle a failed httpx attempt: sleep, then return the next attempt count.
+
+    Mirrors _gh_api_maybe_retry's policy for the in-process transport:
+    rate limits back off honoring the Retry-After header, 404 is terminal,
+    transient 5xx retry with backoff, anything else is terminal.
+    """
+    if _is_http_rate_limited(status, body, headers):
+        attempt += 1
+        secondary = "secondary rate limit" in (body or "").lower()
+        if attempt >= RETRY_ATTEMPTS:
+            raise RateLimitError(_http_rate_limit_message(endpoint, secondary=secondary))
+        # Throttled: back off with jitter so parallel discover workers
+        # don't retry in lockstep.
+        _http_backoff(headers, attempt)
+        return attempt
+    if status == 404:
+        raise NotFoundError(f"not found: {endpoint}")
+    attempt += 1
+    if status not in (500, 502, 503, 504) or attempt >= RETRY_ATTEMPTS:
+        raise TakenError(f"`gh api {endpoint}` failed: HTTP {status}")
+    # Transient 5xx: back off with jitter so parallel discover workers
+    # don't retry in lockstep.
+    _http_backoff(headers, attempt)
+    return attempt
 
 
 def _paged_list(endpoint, params=None):
