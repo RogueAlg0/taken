@@ -27,8 +27,6 @@ import threading
 import time
 import urllib.parse
 
-import httpx
-
 from taken import __version__
 
 API_BASE = "https://api.github.com/"
@@ -130,6 +128,25 @@ def _verify_arg():
     return True
 
 
+# httpx is imported lazily: the default subprocess transport path must work
+# without the dependency installed, so nothing at module import time may
+# require it. Only the httpx code path below touches it.
+def _httpx():
+    try:
+        import httpx
+    except ImportError as exc:
+        raise TransportError("the httpx transport needs the 'httpx' package installed") from exc
+    return httpx
+
+
+def __getattr__(name):
+    # PEP 562: keep `transport.httpx` working for existing consumers while
+    # the real import stays lazy (see _httpx above).
+    if name == "httpx":
+        return _httpx()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 def _client_kwargs():
     kwargs = {
         "headers": {
@@ -138,7 +155,7 @@ def _client_kwargs():
         },
         "timeout": DEFAULT_TIMEOUT,
         "verify": _verify_arg(),
-        "limits": httpx.Limits(max_connections=20, max_keepalive_connections=20),
+        "limits": _httpx().Limits(max_connections=20, max_keepalive_connections=20),
     }
     raw_proxy = _raw_proxy_url()
     if raw_proxy is not None:
@@ -159,7 +176,7 @@ def _get_client():
     if _client is None:
         with _client_lock:
             if _client is None:
-                _client = httpx.Client(**_client_kwargs())
+                _client = _httpx().Client(**_client_kwargs())
                 atexit.register(_close_client)
     return _client
 
@@ -309,9 +326,9 @@ def _single_get(endpoint, params, bearer, timeout):
             headers={"Authorization": bearer},
             timeout=timeout,
         )
-    except httpx.TimeoutException as exc:
+    except _httpx().TimeoutException as exc:
         raise TransportTimeout(f"GET {endpoint} timed out after {timeout}s") from exc
-    except httpx.HTTPError as exc:
+    except _httpx().HTTPError as exc:
         raise TransportError(f"GET {endpoint} failed: {exc}") from exc
     _note_rate_limit_headers(resp.headers)
     return resp.status_code, resp.text, dict(resp.headers)
