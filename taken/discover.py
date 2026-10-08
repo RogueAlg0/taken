@@ -43,8 +43,8 @@ class DiscoverOptions:
         progress bar.
     on_searched: called as on_searched([(label, count)]) after the search
         phase, so callers can report what was searched.
-    mode: verification fetch path: "rest" (default), "graphql", or
-        "persistent" (see graphql.fetch_mode).
+    mode: verification fetch path: "rest" (default), "graphql", "httpx",
+        or "persistent" (see graphql.fetch_mode).
     thresholds: stale-claim decay settings (issue #83); None means the
         defaults.
     allocation: how verify-pool slots are assigned across repos: "bandit"

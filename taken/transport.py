@@ -4,7 +4,10 @@ Phase 1 of the httpx migration: replaces one `gh api` subprocess per call
 with a single persistent pooled httpx.Client per process. Phase 2 adds
 ETag conditional requests: when the caller supplies an ETag, the transport
 sends If-None-Match and surfaces 304 Not Modified for the caller
-(taken/checks.py) to resolve against its response cache. taken keeps its
+(taken/checks.py) to resolve against its response cache. Phase 3 adds
+GraphQL: api_graphql POSTs queries through the same persistent client,
+with points-based preemptive backoff read from each response's rateLimit
+block. taken keeps its
 "never sees raw tokens" posture: authentication resolves once per process
 to an in-process surrogate that the egress proxy swaps for the real
 credential, exactly as the `gh` shim does today. The surrogate lives in
@@ -24,15 +27,18 @@ sleeps preemptively when the budget is nearly spent.
 """
 
 import atexit
+import json
 import os
 import sys
 import threading
 import time
 import urllib.parse
+from datetime import datetime
 
 from taken import __version__
 
 API_BASE = "https://api.github.com/"
+GRAPHQL_URL = "https://api.github.com/graphql"
 DEFAULT_TIMEOUT = 60.0
 _USER_AGENT = f"taken/{__version__} (httpx)"
 
@@ -370,3 +376,132 @@ def api_get(endpoint, params=None, timeout=DEFAULT_TIMEOUT, etag=None):
             raise TransportAuthError("credential refresh failed for the httpx transport")
         status, body, headers = _single_get(endpoint, params, bearer, timeout, etag=etag)
     return status, body, headers
+
+
+# ---------------------------------------------------------------------------
+# GraphQL (phase 3): POST queries through the same persistent client.
+#
+# GitHub's GraphQL budget is points-based, not call-based, so beside the
+# shared token bucket (which paces calls) the transport tracks the
+# points remaining/reset from each response's rateLimit block and sleeps
+# preemptively when the points are nearly spent.
+# ---------------------------------------------------------------------------
+
+# Preemptive points sleep: when the last rateLimit block showed this many
+# (or fewer) points remaining, wait for the reset window. The issue query
+# costs on the order of tens of points; 100 leaves headroom for a few
+# more queries before the reset.
+_GRAPHQL_PREEMPTIVE_POINTS = 100
+# Longest preemptive points sleep: beyond this, fail fast with
+# TransportRateLimited instead of hanging (same philosophy as the REST
+# layer's _MAX_PREEMPTIVE_SLEEP).
+_GRAPHQL_MAX_PREEMPTIVE_SLEEP = 120.0
+
+_graphql_rate_state = {"remaining": None, "reset": None}
+_graphql_rate_lock = threading.Lock()
+
+
+def _parse_graphql_ts(value):
+    """Parse a GraphQL ISO-8601 timestamp to epoch seconds; None if unparseable."""
+    text = (value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
+
+
+def _note_graphql_rate_limit(block):
+    """Record remaining points/reset from a GraphQL rateLimit block."""
+    try:
+        remaining = block.get("remaining")
+        reset = _parse_graphql_ts(block.get("resetAt"))
+        with _graphql_rate_lock:
+            _graphql_rate_state["remaining"] = int(remaining) if remaining is not None else None
+            _graphql_rate_state["reset"] = reset
+    except (TypeError, ValueError, AttributeError):
+        pass
+
+
+def _preemptive_sleep_graphql():
+    """Sleep before sending when the GraphQL points budget is nearly spent.
+
+    Points-based twin of _preemptive_sleep: when the last rateLimit block
+    showed at most _GRAPHQL_PREEMPTIVE_POINTS remaining and the reset is
+    still in the future, wait it out instead of sending a query that
+    would be rejected. A reset further out than
+    _GRAPHQL_MAX_PREEMPTIVE_SLEEP raises TransportRateLimited so the
+    caller fails fast with a clear message instead of hanging.
+    """
+    with _graphql_rate_lock:
+        remaining = _graphql_rate_state["remaining"]
+        reset = _graphql_rate_state["reset"]
+    if remaining is None or reset is None or remaining > _GRAPHQL_PREEMPTIVE_POINTS:
+        return
+    wait = reset - time.time()
+    if wait <= 0:
+        return
+    if wait > _GRAPHQL_MAX_PREEMPTIVE_SLEEP:
+        raise TransportRateLimited(reset)
+    time.sleep(wait + 1.0)
+
+
+def _single_graphql_post(query, variables, bearer, timeout):
+    client = _get_client()
+    try:
+        resp = client.post(
+            GRAPHQL_URL,
+            json={"query": query, "variables": variables or {}},
+            headers={"Authorization": bearer, "Content-Type": "application/json"},
+            timeout=timeout,
+        )
+    except _httpx().TimeoutException as exc:
+        raise TransportTimeout(f"GraphQL query timed out after {timeout}s") from exc
+    except _httpx().HTTPError as exc:
+        raise TransportError(f"GraphQL query failed: {exc}") from exc
+    return resp.status_code, resp.text
+
+
+def api_graphql(query, variables=None, timeout=DEFAULT_TIMEOUT):
+    """POST one GraphQL query; return (status_code, payload_dict).
+
+    Single attempt: the shared token-bucket pace, the points-based
+    preemptive sleep, and one surrogate refresh on 401 all happen here.
+    Retry policy stays with the caller (taken/graphql.py). Raises
+    TransportAuthError when no credential is available, TransportTimeout
+    on timeout, TransportRateLimited when the points budget is spent (or
+    the endpoint answers 429), and TransportError on transport failures
+    or non-JSON responses. The GraphQL `errors` array is NOT interpreted
+    here; the caller maps it to its own error types.
+    """
+    _pace("graphql")
+    _preemptive_sleep()
+    _preemptive_sleep_graphql()
+    bearer = _resolve_bearer()
+    if bearer is None:
+        raise TransportAuthError("no credential available for the httpx transport")
+    status, text = _single_graphql_post(query, variables, bearer, timeout)
+    if status == 401 and _surrogate is not None:
+        # The surrogate may have expired: refresh once, retry once.
+        _clear_surrogate()
+        bearer = _resolve_bearer()
+        if bearer is None:
+            raise TransportAuthError("credential refresh failed for the httpx transport")
+        status, text = _single_graphql_post(query, variables, bearer, timeout)
+    if status == 429:
+        raise TransportRateLimited(0)
+    if status >= 400:
+        raise TransportError(f"GraphQL query failed: HTTP {status}")
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise TransportError("GraphQL response was not JSON") from exc
+    if not isinstance(payload, dict):
+        raise TransportError("GraphQL response was not a JSON object")
+    rate_block = (payload.get("data") or {}).get("rateLimit")
+    if isinstance(rate_block, dict):
+        _note_graphql_rate_limit(rate_block)
+    return status, payload
