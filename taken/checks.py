@@ -1147,6 +1147,33 @@ def _gh_api_run_httpx(endpoint, params, paced, etag=None):
     return result
 
 
+def _httpx_single_attempt(endpoint, params, etag):
+    """Run one httpx GET attempt; return (status, body, headers).
+
+    Transport errors are mapped onto the taken error types here so the
+    retry loop in _gh_api_run_httpx_impl stays readable (S3776).
+    """
+    try:
+        record_api_call(endpoint)
+        rest_start = time.perf_counter()
+        if etag is None:
+            status, body, headers = transport.api_get(endpoint, params, API_TIMEOUT)
+        else:
+            status, body, headers = transport.api_get(endpoint, params, API_TIMEOUT, etag=etag)
+        record_phase("rest", time.perf_counter() - rest_start)
+    except transport.TransportAuthError:
+        raise
+    except transport.TransportTimeout:
+        raise TakenError(f"`gh api {endpoint}` timed out after {API_TIMEOUT}s") from None
+    except transport.TransportRateLimited as exc:
+        raise RateLimitError(
+            _http_rate_limit_message(endpoint, reset_epoch=exc.reset_epoch)
+        ) from None
+    except transport.TransportError as exc:
+        raise TakenError(f"`gh api {endpoint}` failed: {exc}") from None
+    return status, body, headers
+
+
 def _gh_api_run_httpx_impl(endpoint, params, paced, etag=None):
     """Run one httpx GET through the retry loop; return (data, response_etag).
 
@@ -1169,24 +1196,7 @@ def _gh_api_run_httpx_impl(endpoint, params, paced, etag=None):
     while True:
         if paced:
             _wait_search_pace()
-        try:
-            record_api_call(endpoint)
-            rest_start = time.perf_counter()
-            if etag is None:
-                status, body, headers = transport.api_get(endpoint, params, API_TIMEOUT)
-            else:
-                status, body, headers = transport.api_get(endpoint, params, API_TIMEOUT, etag=etag)
-            record_phase("rest", time.perf_counter() - rest_start)
-        except transport.TransportAuthError:
-            raise
-        except transport.TransportTimeout:
-            raise TakenError(f"`gh api {endpoint}` timed out after {API_TIMEOUT}s") from None
-        except transport.TransportRateLimited as exc:
-            raise RateLimitError(
-                _http_rate_limit_message(endpoint, reset_epoch=exc.reset_epoch)
-            ) from None
-        except transport.TransportError as exc:
-            raise TakenError(f"`gh api {endpoint}` failed: {exc}") from None
+        status, body, headers = _httpx_single_attempt(endpoint, params, etag)
         if status == 304:
             # Conditional revalidation hit: the cached body is still
             # current. Undo the call count for this attempt: a 304 is a

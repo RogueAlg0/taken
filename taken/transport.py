@@ -42,6 +42,9 @@ GRAPHQL_URL = "https://api.github.com/graphql"
 DEFAULT_TIMEOUT = 60.0
 _USER_AGENT = f"taken/{__version__} (httpx)"
 
+# Prefix for the Authorization header value (S1192: defined once).
+_BEARER_PREFIX = "Bearer "
+
 # Well-known locations for this environment's credential broker and the
 # shared token-bucket pacer (the same paths the project's own `gh` shim
 # uses). Both are optional: when absent, auth falls back to
@@ -232,21 +235,21 @@ def _resolve_bearer():
     """
     global _surrogate
     if _surrogate is not None:
-        return "Bearer " + _surrogate
+        return _BEARER_PREFIX + _surrogate
     with _surrogate_lock:
         if _surrogate is not None:
-            return "Bearer " + _surrogate
+            return _BEARER_PREFIX + _surrogate
         entry_fn = _broker_entry_fn()
         if entry_fn is not None:
             try:
                 _surrogate = entry_fn("custom.github", "access_token")["surrogate"]
-                return "Bearer " + _surrogate
+                return _BEARER_PREFIX + _surrogate
             except Exception:
                 _surrogate = None
         for var in ("GH_TOKEN", "GITHUB_TOKEN"):
             token = os.environ.get(var)
             if token:
-                return "Bearer " + token
+                return _BEARER_PREFIX + token
     return None
 
 
