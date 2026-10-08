@@ -30,8 +30,9 @@ REQUIRED_ARGUMENTS = {
 
 @pytest.mark.parametrize("flag", COUNT_FLAGS)
 def test_count_flags_reject_negative_values(flag, capsys):
+    parser = build_parser()
     with pytest.raises(SystemExit) as exc_info:
-        build_parser().parse_args([flag, "-5"])
+        parser.parse_args([flag, "-5"])
 
     assert exc_info.value.code == 2
     assert f"argument {flag}: must be non-negative" in capsys.readouterr().err
@@ -46,8 +47,9 @@ def test_count_flags_accept_zero(flag):
 
 @pytest.mark.parametrize("value", ["-0.1", "1.5", "nan"])
 def test_explore_floor_rejects_values_outside_zero_to_one(value, capsys):
+    parser = build_parser()
     with pytest.raises(SystemExit) as exc_info:
-        build_parser().parse_args(["--explore-floor", value])
+        parser.parse_args(["--explore-floor", value])
 
     assert exc_info.value.code == 2
     assert "argument --explore-floor: must be between 0 and 1" in capsys.readouterr().err
@@ -83,5 +85,9 @@ def test_mcp_numeric_parameters_reject_negative_values(monkeypatch, tool, parame
     monkeypatch.setattr(checks, "gh_api", no_api_calls)
     monkeypatch.setattr(discover, "discover", no_api_calls)
 
+    # Build the coroutine outside the raises block so the block holds a
+    # single throwing invocation (python:S5778). Creating the coroutine
+    # runs no code; the ToolError surfaces when asyncio runs it.
+    coro = mcp.call_tool(tool, {**REQUIRED_ARGUMENTS[tool], parameter: -5})
     with pytest.raises(ToolError, match="greater than or equal to 0"):
-        asyncio.run(mcp.call_tool(tool, {**REQUIRED_ARGUMENTS[tool], parameter: -5}))
+        asyncio.run(coro)
