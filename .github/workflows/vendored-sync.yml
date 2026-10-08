@@ -34,8 +34,8 @@ jobs:
     # Same-repo PRs only: never push to a contributor's fork.
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    # No GITHUB_TOKEN permissions needed: the push below authenticates with
+    # HOTSPOT_MERGE_PAT (see header comment). Inherits top-level deny-all.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -45,6 +45,12 @@ jobs:
           # be the PAT (see header comment, #361).
           token: ${{ secrets.HOTSPOT_MERGE_PAT }}
       - name: Re-copy vendored files when they drifted
+        # Pass the head ref via env, not inline ${{ }}, so a hostile branch
+        # name can never break out of the shell command (script injection).
+        # The same-repo `if:` guard above already limits this to branches
+        # the maintainer can push to directly.
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           drift=0
           for pair in "taken/checks.py docs/console/py/checks.py" "taken/verdict.py docs/console/py/verdict.py" "taken/budget.py docs/console/py/budget.py"; do
@@ -63,4 +69,4 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add docs/console/py/checks.py docs/console/py/verdict.py docs/console/py/budget.py
           git commit -m "docs: sync vendored console copies"
-          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+          git push origin "HEAD:${HEAD_REF}"
