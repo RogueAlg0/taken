@@ -826,11 +826,34 @@ def _cache_read(key):
     return entry["data"]
 
 
-def _cache_write(key, data):
+def _cache_entry(key):
+    """Return the raw cache entry for key, ignoring TTL.
+
+    Used for ETag revalidation: a TTL-expired entry still carries its ETag
+    and body, so a conditional request can avoid a full fetch. Returns None
+    when the entry is absent or unreadable. The entry dict has fetched_at,
+    data, and etag keys; etag may be absent in entries written before ETag
+    support, so callers must use .get("etag").
+    """
+    namespaced = _namespaced_key(key)
+    if namespaced is None:
+        return None
+    with _MEM_LOCK:
+        entry = _MEM_CACHE.get(namespaced)
+    if entry is None:
+        try:
+            with open(_cache_file(namespaced), encoding="utf-8") as fh:
+                entry = json.load(fh)
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+    return entry
+
+
+def _cache_write(key, data, etag=None):
     key = _namespaced_key(key)
     if key is None:
         return
-    entry = {"fetched_at": time.time(), "data": data}
+    entry = {"fetched_at": time.time(), "data": data, "etag": etag}
     _mem_put(key, entry)
     try:
         path = _cache_file(key)
@@ -1005,6 +1028,12 @@ def gh_api(endpoint, params=None):
     until the httpx soak completes. The httpx path falls back to the
     subprocess path when no credential is available, so environments
     without auth keep working unchanged.
+
+    On the httpx path, a TTL-expired cache entry that carries an ETag is
+    revalidated with a conditional GET (If-None-Match) instead of a full
+    fetch; a 304 serves the stale body with a refreshed TTL and consumes
+    no rate-limit budget. Response ETags are persisted alongside the body
+    so the next expiry can revalidate again.
     """
     # Normalize before validating: the allowlist must see exactly the string
     # that reaches the transport. Stripping first also closes the theoretical
@@ -1012,6 +1041,8 @@ def gh_api(endpoint, params=None):
     endpoint = endpoint.lstrip("/") if isinstance(endpoint, str) else endpoint
     _require_safe_endpoint(endpoint)
     key = _cache_key(endpoint, params)
+    stale_etag = None
+    stale_data = None
     if _CACHE_ENABLED:
         cache_start = time.perf_counter()
         cached = _cache_read(key)
@@ -1020,25 +1051,52 @@ def gh_api(endpoint, params=None):
             record_cache_result(True)
             return cached
         record_cache_result(False)
-    if endpoint.startswith("search/"):
-        # Search pacing: hold the lock through the pace wait AND the entire
-        # retry loop, so parallel discover workers and retry bursts can never
-        # have two search requests in flight at once. Non-search endpoints
-        # never touch this lock and stay fully parallel.
-        with _search_lock:
-            data = _rest_get(endpoint, params, paced=True)
-    else:
-        data = _rest_get(endpoint, params, paced=False)
+        # TTL-expired entry: keep its ETag and body for conditional
+        # revalidation. Entries written before ETag support have no etag.
+        entry = _cache_entry(key)
+        if entry is not None and entry.get("etag") and "data" in entry:
+            stale_etag = entry["etag"]
+            stale_data = entry["data"]
+    try:
+        if endpoint.startswith("search/"):
+            # Search pacing: hold the lock through the pace wait AND the
+            # entire retry loop, so parallel discover workers and retry
+            # bursts can never have two search requests in flight at once.
+            # Non-search endpoints never touch this lock and stay fully
+            # parallel.
+            with _search_lock:
+                data = _rest_get(endpoint, params, paced=True, etag=stale_etag)
+        else:
+            data = _rest_get(endpoint, params, paced=False, etag=stale_etag)
+    except _NotModified:
+        # 304 Not Modified: the cached body is still current. Refresh its
+        # timestamp so the TTL restarts; the caller sees the same parsed
+        # JSON as a 200.
+        data = stale_data
+        response_etag = stale_etag
+        if _CACHE_ENABLED:
+            _cache_write(key, data, etag=response_etag)
+        return data
     if _CACHE_ENABLED:
-        _cache_write(key, data)
+        # The httpx path returns _EtaggedData carrying the response ETag;
+        # the subprocess path returns a plain dict (etag None).
+        _cache_write(key, data, etag=getattr(data, "etag", None))
     return data
 
 
-def _rest_get(endpoint, params, paced):
-    """Dispatch one REST GET to the selected transport."""
+def _rest_get(endpoint, params, paced, etag=None):
+    """Dispatch one REST GET to the selected transport.
+
+    The etag is forwarded to the httpx path for conditional revalidation;
+    the subprocess path is etag-unaware and keeps its historical behavior
+    exactly. The extra kwarg is only passed through when set so mocked
+    collaborators with the historical 3-arg signature keep working.
+    """
     if transport.use_httpx():
         try:
-            return _gh_api_run_httpx(endpoint, params, paced)
+            if etag is None:
+                return _gh_api_run_httpx(endpoint, params, paced)
+            return _gh_api_run_httpx(endpoint, params, paced, etag=etag)
         except transport.TransportAuthError:
             # No credential for the httpx path: degraded, not dead.
             pass
@@ -1052,8 +1110,45 @@ def _rest_get(endpoint, params, paced):
     return _gh_api_run(cmd, endpoint, paced=paced)
 
 
-def _gh_api_run_httpx(endpoint, params, paced):
+class _NotModified(Exception):
+    """Internal control flow: the httpx transport got 304 Not Modified.
+
+    Raised when a conditional GET (If-None-Match) finds the resource
+    unchanged. The caller (gh_api) resolves it against the stale cache
+    entry: same parsed JSON as a 200, refreshed TTL, no rate-limit budget
+    consumed.
+    """
+
+
+class _EtaggedData(dict):
+    """Parsed JSON response carrying the response ETag.
+
+    Lets the httpx transport report the ETag alongside the body without
+    changing _gh_api_run_httpx's return contract: a dict subclass compares
+    equal to a plain dict, so existing callers and tests see no difference.
+    The etag attribute is None when the response carried no ETag (or when
+    the data came from the subprocess path, which is etag-unaware).
+    """
+
+    etag: str | None = None
+
+
+def _gh_api_run_httpx(endpoint, params, paced, etag=None):
     """Run one httpx GET through the retry loop; return parsed JSON.
+
+    The returned dict is an _EtaggedData carrying the response ETag in its
+    .etag attribute, so gh_api can persist it for conditional revalidation.
+    The etag kwarg is only forwarded when set so the historical call shape
+    is preserved for existing collaborators.
+    """
+    data, response_etag = _gh_api_run_httpx_impl(endpoint, params, paced, etag)
+    result = _EtaggedData(data)
+    result.etag = response_etag
+    return result
+
+
+def _gh_api_run_httpx_impl(endpoint, params, paced, etag=None):
+    """Run one httpx GET through the retry loop; return (data, response_etag).
 
     Mirrors _gh_api_run's policy: the same endpoint allowlist check at the
     boundary, the same search pacing/lock discipline (the caller holds
@@ -1061,6 +1156,12 @@ def _gh_api_run_httpx(endpoint, params, paced):
     error types. Only the attempt mechanism differs (in-process httpx
     instead of a `gh api` subprocess), so Retry-After comes from the
     response header rather than parsed stderr text.
+
+    When etag is given, the request is conditional (If-None-Match). A 304
+    raises _NotModified; GitHub does not charge 304s against the
+    rate-limit budget, so the attempt is not counted as a consuming call.
+    response_etag is the response's ETag header value, or None when the
+    response carried none.
     """
     # Defense in depth, same as _gh_api_run: re-validate at the boundary.
     _require_safe_endpoint(endpoint)
@@ -1071,7 +1172,10 @@ def _gh_api_run_httpx(endpoint, params, paced):
         try:
             record_api_call(endpoint)
             rest_start = time.perf_counter()
-            status, body, headers = transport.api_get(endpoint, params, API_TIMEOUT)
+            if etag is None:
+                status, body, headers = transport.api_get(endpoint, params, API_TIMEOUT)
+            else:
+                status, body, headers = transport.api_get(endpoint, params, API_TIMEOUT, etag=etag)
             record_phase("rest", time.perf_counter() - rest_start)
         except transport.TransportAuthError:
             raise
@@ -1083,6 +1187,13 @@ def _gh_api_run_httpx(endpoint, params, paced):
             ) from None
         except transport.TransportError as exc:
             raise TakenError(f"`gh api {endpoint}` failed: {exc}") from None
+        if status == 304:
+            # Conditional revalidation hit: the cached body is still
+            # current. Undo the call count for this attempt: a 304 is a
+            # real HTTP request but consumes no rate-limit budget.
+            with _API_STATS_LOCK:
+                _API_STATS["calls"][endpoint] -= 1
+            raise _NotModified(endpoint)
         if status == 200:
             break
         attempt = _http_maybe_retry(endpoint, status, body, headers, attempt)
@@ -1091,7 +1202,7 @@ def _gh_api_run_httpx(endpoint, params, paced):
         data = json.loads(body)
     except json.JSONDecodeError:
         raise TakenError(f"`gh api {endpoint}` did not return JSON") from None
-    return data
+    return data, headers.get("etag")
 
 
 def _is_http_rate_limited(status, body, headers):

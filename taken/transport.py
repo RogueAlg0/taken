@@ -1,7 +1,10 @@
 """In-process httpx transport for the GitHub REST API.
 
 Phase 1 of the httpx migration: replaces one `gh api` subprocess per call
-with a single persistent pooled httpx.Client per process. taken keeps its
+with a single persistent pooled httpx.Client per process. Phase 2 adds
+ETag conditional requests: when the caller supplies an ETag, the transport
+sends If-None-Match and surfaces 304 Not Modified for the caller
+(taken/checks.py) to resolve against its response cache. taken keeps its
 "never sees raw tokens" posture: authentication resolves once per process
 to an in-process surrogate that the egress proxy swaps for the real
 credential, exactly as the `gh` shim does today. The surrogate lives in
@@ -319,13 +322,16 @@ def _preemptive_sleep():
     time.sleep(wait + 1.0)
 
 
-def _single_get(endpoint, params, bearer, timeout):
+def _single_get(endpoint, params, bearer, timeout, etag=None):
     client = _get_client()
+    headers = {"Authorization": bearer}
+    if etag is not None:
+        headers["If-None-Match"] = etag
     try:
         resp = client.get(
             API_BASE + endpoint.lstrip("/"),
             params=params or {},
-            headers={"Authorization": bearer},
+            headers=headers,
             timeout=timeout,
         )
     except _httpx().TimeoutException as exc:
@@ -336,7 +342,7 @@ def _single_get(endpoint, params, bearer, timeout):
     return resp.status_code, resp.text, dict(resp.headers)
 
 
-def api_get(endpoint, params=None, timeout=DEFAULT_TIMEOUT):
+def api_get(endpoint, params=None, timeout=DEFAULT_TIMEOUT, etag=None):
     """GET one GitHub API path; return (status_code, body_text, headers).
 
     Single attempt: token-bucket pacing, preemptive rate-limit sleep, and
@@ -344,18 +350,23 @@ def api_get(endpoint, params=None, timeout=DEFAULT_TIMEOUT):
     the caller (taken/checks.py). Raises TransportAuthError when no
     credential is available, TransportTimeout on timeout,
     TransportRateLimited when the budget is spent.
+
+    When etag is given, the request is conditional (If-None-Match) and a
+    304 Not Modified comes back as status 304 with an empty body; the
+    caller resolves it against its cache. The etag parameter defaults to
+    None so existing callers are unaffected.
     """
     _pace(endpoint)
     _preemptive_sleep()
     bearer = _resolve_bearer()
     if bearer is None:
         raise TransportAuthError("no credential available for the httpx transport")
-    status, body, headers = _single_get(endpoint, params, bearer, timeout)
+    status, body, headers = _single_get(endpoint, params, bearer, timeout, etag=etag)
     if status == 401 and _surrogate is not None:
         # The surrogate may have expired: refresh once, retry once.
         _clear_surrogate()
         bearer = _resolve_bearer()
         if bearer is None:
             raise TransportAuthError("credential refresh failed for the httpx transport")
-        status, body, headers = _single_get(endpoint, params, bearer, timeout)
+        status, body, headers = _single_get(endpoint, params, bearer, timeout, etag=etag)
     return status, body, headers
