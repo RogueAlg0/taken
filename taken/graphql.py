@@ -1,7 +1,7 @@
 """GraphQL fetch path for taken.
 
 Produces the exact same findings-dict shape as ``checks.run_checks`` so
-``verdict.decide()`` is untouched. Two transports:
+``verdict.decide()`` is untouched. Three transports:
 
 - ``"graphql"``: one GraphQL query per issue via the ``gh api graphql``
   subprocess. Same auth model as the REST path: taken never sees tokens.
@@ -9,6 +9,11 @@ Produces the exact same findings-dict shape as ``checks.run_checks`` so
   connection held for the process lifetime. The token comes from
   ``gh auth token`` once at startup, is held in memory only, and is never
   logged or written to disk. Explicit opt-in only.
+- ``"httpx"``: the same query POSTed through taken/transport.py's
+  persistent pooled httpx client (phase 3 of the httpx migration):
+  surrogate auth, shared token-bucket pacing, and points-based
+  preemptive backoff from each response's rateLimit block. Explicit
+  opt-in via ``TAKEN_GRAPHQL_TRANSPORT=httpx``.
 
 GraphQL is the default for authenticated invokers (``gh`` logged in);
 REST remains the default for anonymous use and is always available as an
@@ -32,7 +37,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from taken import budget, checks
+from taken import budget, checks, transport
 
 # Fail-closed pagination ceilings, mirroring the REST path's scan depth:
 # comments/timeline up to 500 items (5 x 100), commits up to 300 (3 x 100),
@@ -135,8 +140,19 @@ def _is_authenticated():
         return False
 
 
+def use_httpx_graphql():
+    """True when TAKEN_GRAPHQL_TRANSPORT selects the httpx GraphQL transport.
+
+    Opt-in only: the explicit value "httpx" (any case) routes GraphQL
+    through taken/transport.py's persistent client. Anything else keeps
+    the existing transports. Independent of TAKEN_TRANSPORT (the REST
+    soak flag): the GraphQL transport is chosen here, per query path.
+    """
+    return os.environ.get("TAKEN_GRAPHQL_TRANSPORT", "").strip().lower() == "httpx"
+
+
 def fetch_mode(args=None):
-    """Resolve which fetch path to use: "rest" | "graphql" | "persistent".
+    """Resolve which fetch path to use: "rest" | "graphql" | "persistent" | "httpx".
 
     Selection order (first match wins):
 
@@ -144,9 +160,11 @@ def fetch_mode(args=None):
        ``TAKEN_PERSISTENT_SESSION=1``)
     2. explicit rest (``--rest`` / ``TAKEN_REST=1``): the escape hatch, and
        it beats ``--graphql`` so there is always a way to force REST
-    3. explicit graphql (``--graphql`` / ``TAKEN_GRAPHQL=1``)
-    4. authenticated invoker -> ``"graphql"`` (the default for logged-in users)
-    5. otherwise ``"rest"`` (the anonymous / console tier stays on REST)
+    3. explicit httpx GraphQL (``TAKEN_GRAPHQL_TRANSPORT=httpx``): upgrades
+       the GraphQL choice to the httpx transport
+    4. explicit graphql (``--graphql`` / ``TAKEN_GRAPHQL=1``)
+    5. authenticated invoker -> ``"graphql"`` (the default for logged-in users)
+    6. otherwise ``"rest"`` (the anonymous / console tier stays on REST)
 
     This is the single place that maps "what the caller asked for" to a
     transport, so a future budget tier can pick the pipe here.
@@ -158,6 +176,8 @@ def fetch_mode(args=None):
         return "persistent"
     if flag_rest or os.environ.get("TAKEN_REST") == "1":
         return "rest"
+    if use_httpx_graphql():
+        return "httpx"
     if flag_graphql or os.environ.get("TAKEN_GRAPHQL") == "1":
         return "graphql"
     if _is_authenticated():
@@ -255,12 +275,17 @@ def _run_gql_attempt(cmd):
     return payload
 
 
-def _fetch_with_retries(query, variables, cmd):
-    """Fetch through the cache with bounded rate-limit retries and backoff."""
+def _fetch_with_retries_callable(query, variables, fetch):
+    """Fetch through the cache with bounded rate-limit retries and backoff.
+
+    `fetch` is a zero-arg callable returning the payload dict; rate-limit
+    failures get bounded retries with backoff and jitter, anything else
+    propagates so the caller can fall back to REST.
+    """
     attempt = 0
     while True:
         try:
-            return _cached_or_fetch(query, variables, lambda: _run_gql_attempt(cmd))
+            return _cached_or_fetch(query, variables, fetch)
         except checks.RateLimitError:
             attempt += 1
             if attempt >= checks.RETRY_ATTEMPTS:
@@ -268,6 +293,48 @@ def _fetch_with_retries(query, variables, cmd):
             delay = checks.RETRY_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
             checks.record_retry(delay)
             time.sleep(delay)
+
+
+def _fetch_with_retries(query, variables, cmd):
+    """Fetch through the cache with bounded rate-limit retries and backoff."""
+    return _fetch_with_retries_callable(query, variables, lambda: _run_gql_attempt(cmd))
+
+
+def _fetch_via_httpx_transport(query, variables):
+    """POST one GraphQL query through the httpx transport (phase 3).
+
+    Maps transport-level failures onto the checks error types so the
+    existing retry discipline and REST fallback apply unchanged. The
+    GraphQL `errors` array is interpreted by _raise_for_errors in
+    _cached_or_fetch, exactly as on the other transports.
+    """
+    try:
+        _status, payload = transport.api_graphql(query, variables)
+    except transport.TransportRateLimited as exc:
+        raise checks.RateLimitError(
+            "GitHub GraphQL points budget exhausted "
+            f"(resets at {exc.reset_epoch}). "
+            "Check `gh api rate_limit` for the reset time. No verdict was recorded."
+        ) from exc
+    except transport.TransportAuthError as exc:
+        raise checks.TakenError(f"httpx GraphQL transport has no credential: {exc}") from exc
+    except transport.TransportTimeout as exc:
+        raise checks.TakenError(f"httpx GraphQL query timed out: {exc}") from exc
+    except transport.TransportError as exc:
+        raise checks.TakenError(f"httpx GraphQL query failed: {exc}") from exc
+    return payload
+
+
+def graphql_via_httpx(query, variables):
+    """POST one GraphQL query via the httpx transport (phase 3).
+
+    Mirrors graphql_via_gh's retry discipline: rate-limited responses get
+    bounded retries with backoff and jitter; transport failures propagate
+    so run_checks_with_fallback can fall back to REST.
+    """
+    return _fetch_with_retries_callable(
+        query, variables, lambda: _fetch_via_httpx_transport(query, variables)
+    )
 
 
 def graphql_via_gh(query, variables):
@@ -681,6 +748,8 @@ def _select_fetch(mode, session):
     if mode == "persistent":
         sess = session or get_session()
         return lambda q, v: sess.query(q, v)
+    if mode == "httpx":
+        return lambda q, v: graphql_via_httpx(q, v)
     return lambda q, v: graphql_via_gh(q, v)
 
 
@@ -872,7 +941,7 @@ def run_checks_with_fallback(
     issue, so a REST item cannot substitute for it and the payload is
     ignored there.
     """
-    if mode not in ("graphql", "persistent"):
+    if mode not in ("graphql", "persistent", "httpx"):
         findings = checks.run_checks(
             owner, repo, number, me=me, payload=payload, thresholds=thresholds
         )
