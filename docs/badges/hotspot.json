@@ -18,15 +18,15 @@
     },
     {
       "file": "taken/graphql.py",
-      "cc": 209,
-      "commits": 17,
-      "hotspot": 3553
+      "cc": 219,
+      "commits": 18,
+      "hotspot": 3942
     },
     {
       "file": "taken/discover.py",
       "cc": 117,
-      "commits": 27,
-      "hotspot": 3159
+      "commits": 28,
+      "hotspot": 3276
     },
     {
       "file": "taken/verdict.py",
