@@ -6,9 +6,9 @@
   "files": [
     {
       "file": "taken/checks.py",
-      "cc": 375,
-      "commits": 53,
-      "hotspot": 19875
+      "cc": 390,
+      "commits": 54,
+      "hotspot": 21060
     },
     {
       "file": "taken/cli.py",
