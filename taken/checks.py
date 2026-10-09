@@ -1078,8 +1078,8 @@ def gh_api(endpoint, params=None):
             _cache_write(key, data, etag=response_etag)
         return data
     if _CACHE_ENABLED:
-        # The httpx path returns _EtaggedData carrying the response ETag;
-        # the subprocess path returns a plain dict (etag None).
+        # The httpx path returns a dict or list carrying the response ETag;
+        # the subprocess path returns plain parsed JSON (etag None).
         _cache_write(key, data, etag=getattr(data, "etag", None))
     return data
 
@@ -1133,16 +1133,22 @@ class _EtaggedData(dict):
     etag: str | None = None
 
 
+class _EtaggedList(list):
+    """Parsed JSON array carrying an ETag without changing list behavior."""
+
+    etag: str | None = None
+
+
 def _gh_api_run_httpx(endpoint, params, paced, etag=None):
     """Run one httpx GET through the retry loop; return parsed JSON.
 
-    The returned dict is an _EtaggedData carrying the response ETag in its
-    .etag attribute, so gh_api can persist it for conditional revalidation.
+    The returned dict or list carries the response ETag in its .etag
+    attribute, so gh_api can persist it for conditional revalidation.
     The etag kwarg is only forwarded when set so the historical call shape
     is preserved for existing collaborators.
     """
     data, response_etag = _gh_api_run_httpx_impl(endpoint, params, paced, etag)
-    result = _EtaggedData(data)
+    result = _EtaggedList(data) if isinstance(data, list) else _EtaggedData(data)
     result.etag = response_etag
     return result
 

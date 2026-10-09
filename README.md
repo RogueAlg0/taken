@@ -127,6 +127,11 @@ A bare `owner/repo` scans the repo automatically: its open issues
 API responses are cached for one hour in `~/.cache/taken`
 (override with `TAKEN_CACHE_DIR`), so repeated scans stay cheap.
 
+The opt-in REST transport (`TAKEN_TRANSPORT=httpx`) preserves both JSON
+objects and arrays, including empty listings. Response ETags are cached
+alongside either shape: after expiry, a `304 Not Modified` reuses the cached
+body and refreshes its TTL. The default subprocess transport is unchanged.
+
 ## Discover mode
 
 `taken --discover` finds contribution candidates across GitHub: it takes raw
