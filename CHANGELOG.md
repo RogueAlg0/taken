@@ -26,6 +26,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 - MCP tool error-payload documentation now uses one shared source of truth.
+- CONTRIBUTING.md and ARCHITECTURE.md now list `taken/budget.py` as a vendored
+  console copy, matching the three pairs the docs-sync CI job checks (#349).
 
 ## [0.7.5] - 2026-10-01
 
