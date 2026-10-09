@@ -18,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- The opt-in httpx REST transport now preserves JSON array responses and
+  their ETags instead of coercing arrays into dictionaries (#449).
 - Numeric inputs are now range-checked at the boundary: `--limit` and
   `--min-contributors` reject negative values, `--explore-floor` must be
   between 0 and 1, and the MCP tools reject negative `limit`,

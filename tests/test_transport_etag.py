@@ -152,6 +152,63 @@ def test_impl_wrapper_keeps_plain_dict_contract(monkeypatch):
     assert checks._gh_api_run_httpx("repos/o/r", None, paced=False) == {"ok": True}
 
 
+@pytest.mark.parametrize("payload", [[], [{"id": 1}], [{"id": 1, "state": "open"}]])
+@pytest.mark.parametrize("etag", [None, '"array-v1"'])
+def test_impl_wrapper_preserves_json_arrays(monkeypatch, payload, etag):
+    headers = {} if etag is None else {"etag": etag}
+    monkeypatch.setattr(transport, "api_get", _fake_api_get([(200, json.dumps(payload), headers)]))
+    result = checks._gh_api_run_httpx("repos/o/r/issues", None, paced=False)
+    assert isinstance(result, list)
+    assert result == payload
+    assert json.dumps(result) == json.dumps(payload)
+    assert result.etag == etag
+
+
+@pytest.mark.parametrize("payload", [{"v": 1}, [], [{"id": 1, "labels": ["bug"]}]])
+@pytest.mark.parametrize("replacement_etag", ['"e2"', None])
+def test_gh_api_preserves_payload_through_revalidation(
+    cache_env, httpx_env, tmp_path, monkeypatch, payload, replacement_etag
+):
+    endpoint = "repos/octo/repo/issues"
+    seen = {}
+    replacement = {"v": 2} if isinstance(payload, dict) else [{"id": 2}]
+    headers = {} if replacement_etag is None else {"etag": replacement_etag}
+    responses = [
+        (200, json.dumps(payload), {"etag": '"e1"'}),
+        (304, "", {}),
+        (200, json.dumps(replacement), headers),
+    ]
+    monkeypatch.setattr(transport, "api_get", _fake_api_get(responses, seen))
+    assert checks.gh_api(endpoint) == payload
+    assert seen["etag"] is None
+    # Fresh memory and disk cache hits must preserve arrays, including [].
+    assert checks.gh_api(endpoint) == payload
+    checks._MEM_CACHE.clear()
+    assert checks.gh_api(endpoint) == payload
+    assert len(responses) == 2
+
+    cache_file = _cache_file_for(tmp_path)
+    old = _expire(cache_file)
+    assert old["data"] == payload
+    assert old["etag"] == '"e1"'
+    assert checks.gh_api(endpoint) == payload
+    assert seen["etag"] == '"e1"'
+    refreshed = json.loads(cache_file.read_text())
+    assert refreshed["data"] == payload
+    assert refreshed["etag"] == '"e1"'
+    assert refreshed["fetched_at"] > old["fetched_at"]
+    assert checks._API_STATS["calls"][endpoint] == 1
+
+    _expire(cache_file)
+    assert checks.gh_api(endpoint) == replacement
+    assert seen["etag"] == '"e1"'
+    updated = json.loads(cache_file.read_text())
+    assert updated["data"] == replacement
+    assert updated["etag"] == replacement_etag
+    assert checks._API_STATS["calls"][endpoint] == 2
+    assert not responses
+
+
 # --- cache entry helpers -----------------------------------------------------
 
 
