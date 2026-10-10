@@ -734,7 +734,7 @@ def run_single(text, args):
 
 
 def run_health(owner, repo, args):
-    """Print the maintainer health report for one repo. Read-only; exit 0."""
+    """Print the maintainer health report for one repo. Read-only; exit 0 on success, 3 on error."""
     options = health.HealthOptions(
         claim_wait_days=args.claim_wait_days,
         pr_stale_days=args.pr_stale_days,
