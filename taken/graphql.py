@@ -33,6 +33,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import weakref
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -506,6 +507,13 @@ class PersistentGraphQLSession:
 _SESSION: PersistentGraphQLSession | None = None
 _SESSION_LOCK = threading.Lock()
 
+# Sessions handed out by thread_session(), so the atexit hook can close the
+# ones still alive. Weak references: a finished worker's session is freed
+# with its thread, as before, instead of being kept open until exit by a
+# long-lived process such as the MCP server, which starts a new pool for
+# every scan_repo call.
+_THREAD_SESSIONS: "weakref.WeakSet[PersistentGraphQLSession]" = weakref.WeakSet()
+
 
 def get_session():
     """Process-wide persistent session, created once on first use.
@@ -523,15 +531,21 @@ def get_session():
 
 
 def _close_persistent_sessions():
-    """Close the process-wide session at interpreter exit (atexit hook).
+    """Close the persistent sessions at interpreter exit (atexit hook).
 
-    Keep-alive connections must not outlive the process and wait on GC.
-    Shutdown failures are swallowed: there is nothing useful to do with
+    That is the process-wide session and the per-thread sessions still
+    alive. Keep-alive connections must not outlive the process and wait on
+    GC. Shutdown failures are swallowed: there is nothing useful to do with
     them, and a traceback at exit would mask the real result.
     """
     global _SESSION
-    session, _SESSION = _SESSION, None
+    with _SESSION_LOCK:
+        session, _SESSION = _SESSION, None
+        sessions = list(_THREAD_SESSIONS)
+        _THREAD_SESSIONS.clear()
     if session is not None:
+        sessions.append(session)
+    for session in sessions:
         try:
             session.close()
         except Exception:
@@ -550,12 +564,15 @@ def thread_session():
     ``get_session()`` shares a single keep-alive connection, which is not
     safe to use from pool worker threads; each thread keeps its own
     session (and its own connection) instead. The token is still read once
-    per thread from ``gh auth token`` and held in memory only.
+    per thread from ``gh auth token`` and held in memory only. Sessions
+    still alive at exit are closed by ``_close_persistent_sessions``.
     """
     session = getattr(_thread_state, "graphql_session", None)
     if session is None:
         session = PersistentGraphQLSession()
         _thread_state.graphql_session = session
+        with _SESSION_LOCK:
+            _THREAD_SESSIONS.add(session)
     return session
 
 

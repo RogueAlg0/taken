@@ -839,3 +839,67 @@ def test_close_persistent_sessions_at_exit_swallows_errors(monkeypatch):
     monkeypatch.setattr(graphql, "_SESSION", fake)
     graphql._close_persistent_sessions()  # a traceback at exit would mask the real result
     assert graphql._SESSION is None
+
+
+def _thread_sessions(count):
+    """Run thread_session() on `count` new threads and return their sessions."""
+    import threading
+
+    sessions = []
+    threads = [
+        threading.Thread(target=lambda: sessions.append(graphql.thread_session()))
+        for _ in range(count)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return sessions
+
+
+def test_close_persistent_sessions_closes_thread_sessions(monkeypatch):
+    """The atexit hook closes the per-thread sessions too, not only _SESSION (#450)."""
+    import weakref
+
+    monkeypatch.setattr(graphql, "_SESSION", None)
+    monkeypatch.setattr(graphql, "_THREAD_SESSIONS", weakref.WeakSet())
+    monkeypatch.setattr(graphql, "PersistentGraphQLSession", mock.Mock)
+    sessions = _thread_sessions(3)
+    assert len({id(session) for session in sessions}) == 3
+
+    graphql._close_persistent_sessions()
+
+    for session in sessions:
+        session.close.assert_called_once_with()
+    assert len(graphql._THREAD_SESSIONS) == 0
+
+
+def test_close_persistent_sessions_closes_both_kinds_and_swallows_errors(monkeypatch):
+    import weakref
+
+    shared = mock.Mock()
+    shared.close.side_effect = RuntimeError("shutdown chaos")
+    monkeypatch.setattr(graphql, "_SESSION", shared)
+    monkeypatch.setattr(graphql, "_THREAD_SESSIONS", weakref.WeakSet())
+    monkeypatch.setattr(graphql, "PersistentGraphQLSession", mock.Mock)
+    sessions = _thread_sessions(2)
+    sessions[0].close.side_effect = RuntimeError("shutdown chaos")
+
+    graphql._close_persistent_sessions()
+
+    shared.close.assert_called_once_with()
+    for session in sessions:
+        session.close.assert_called_once_with()
+    assert graphql._SESSION is None
+
+
+def test_thread_session_registry_does_not_keep_finished_threads_alive(monkeypatch):
+    """A long-lived process (the MCP server) must not pile up finished workers' sessions."""
+    import gc
+    import weakref
+
+    monkeypatch.setattr(graphql, "_THREAD_SESSIONS", weakref.WeakSet())
+    monkeypatch.setattr(graphql, "PersistentGraphQLSession", mock.Mock)
+    _thread_sessions(3).clear()
+    gc.collect()
+    assert len(graphql._THREAD_SESSIONS) == 0
