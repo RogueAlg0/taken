@@ -369,8 +369,10 @@ def discover_candidates(
     label: Annotated[
         str | None,
         Field(
+            # No double quotes: they would break out of the quoted search term (#334).
+            pattern=r'^[^"]*$',
             description="Issue label to search. Default: good first issue, good-first-issue, "
-            "beginner friendly, and help wanted."
+            "beginner friendly, and help wanted.",
         ),
     ] = None,
     min_contributors: Annotated[
