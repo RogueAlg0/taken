@@ -152,7 +152,7 @@ def _days_ago(iso_ts):
         return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - dt).days
+    return max(0, (datetime.now(timezone.utc) - dt).days)
 
 
 def score_candidate(findings, updated_at, engaged):
