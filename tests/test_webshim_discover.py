@@ -6,9 +6,9 @@ with the network layer stubbed. The fixture sandboxes webshim's synthetic
 `taken` package so it cannot leak into the rest of the test session.
 """
 
-from datetime import datetime, timedelta, timezone
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -152,8 +152,6 @@ def test_no_failures_no_notes(monkeypatch, webshim):
     assert "note: search for label" not in out
     assert "octo/repo#7" in out
     assert "octo/repo#8" in out
-
-
 
 def test_webshim_score_candidate_clamps_future_timestamps(webshim):
     future = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
