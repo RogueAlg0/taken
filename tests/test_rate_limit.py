@@ -224,12 +224,12 @@ def test_non_search_calls_are_not_paced(monkeypatch):
     assert sleeps == []
 
 
-def test_pace_search_skips_wait_when_interval_elapsed(monkeypatch):
+def test_search_pace_skips_wait_when_interval_elapsed(monkeypatch):
     sleeps = []
     monkeypatch.setattr(checks.time, "sleep", lambda seconds: sleeps.append(seconds))
     monkeypatch.setattr(checks, "SEARCH_MIN_INTERVAL", 2.0)
     monkeypatch.setattr(checks, "_last_search_at", checks.time.monotonic() - 10.0)
-    checks._pace_search()
+    checks._wait_search_pace()
     assert sleeps == []
 
 

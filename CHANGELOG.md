@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Removed
+- The unused `checks._pace_search()` wrapper is gone; search pacing is
+  `checks._wait_search_pace()` under the search lock, and its behavior
+  stays pinned by `tests/test_rate_limit.py` (#329).
+
 ### Fixed
 - The docs console starts again. docs/console/py/ now carries the vendored
   transport.py copy that checks.py imports, and webshim.py sets __version__

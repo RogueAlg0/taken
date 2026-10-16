@@ -437,12 +437,6 @@ def _wait_search_pace():
     _last_search_at = time.monotonic()
 
 
-def _pace_search():
-    """Wait until SEARCH_MIN_INTERVAL has passed since the last search call."""
-    with _search_lock:
-        _wait_search_pace()
-
-
 _TRANSIENT_5XX_RE = re.compile(
     r"\b50[0234]\b|internal server error|bad gateway|service unavailable|gateway timeout",
     re.IGNORECASE,
