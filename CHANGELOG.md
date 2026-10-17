@@ -10,6 +10,9 @@ the fragments into this file.
 
 <!-- towncrier release notes start -->
 
+### Fixed
+- `--discover --label` and the MCP `discover_candidates` tool now reject a label containing a double quote instead of splicing it into the search query, where it ended the quoted term early and the rest was read as query syntax (#334).
+
 ## [0.9.2] - 2026-10-13
 
 ### Added
