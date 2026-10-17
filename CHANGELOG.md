@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- The docs-sync CI check now validates the console's synthesized package
+  version as well as its `taken --version` output, catching a stale transport
+  User-Agent version when only the displayed version is updated (#479).
 - The docs console starts again. docs/console/py/ now carries the vendored
   transport.py copy that checks.py imports, and webshim.py sets __version__
   on the synthesized taken package. The docs-sync CI job and the

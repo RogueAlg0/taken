@@ -97,6 +97,11 @@ jobs:
           import re, sys
           pkg = re.search(r'^version = "(.*)"', open('pyproject.toml').read(), re.M).group(1)
           shim = open('docs/console/py/webshim.py').read()
+          package_version = re.search(r'^_taken_pkg\.__version__\s*=\s*"([^"]*)"', shim, re.M)
+          if package_version is None or package_version.group(1) != pkg:
+              print(f"::error::docs/console/py/webshim.py _taken_pkg.__version__ does not match pyproject.toml ({pkg})")
+              print("Update the hardcoded version on the synthesized taken package.")
+              sys.exit(1)
           if f"taken {pkg} (Pyodide" not in shim:
               print(f"::error::docs/console/py/webshim.py version string does not match pyproject.toml ({pkg})")
               print("Update the hardcoded version in the 'taken --version' branch of run_command().")

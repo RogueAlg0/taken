@@ -77,9 +77,10 @@ These are load-bearing. Do not break them without discussion.
   byte-identical copies of `taken/` for the in-browser Pyodide console. CI
   fails if they drift. Re-copy after any change to those modules:
   `cp taken/checks.py docs/console/py/checks.py && cp taken/verdict.py docs/console/py/verdict.py && cp taken/budget.py docs/console/py/budget.py && cp taken/transport.py docs/console/py/transport.py`.
-- **Version strings move together.** `pyproject.toml` and the
-  `taken --version` string in `docs/console/py/webshim.py` must match; CI enforces
-  this.
+- **Version strings move together.** `pyproject.toml`, `_taken_pkg.__version__`
+  and the `taken --version` string in `docs/console/py/webshim.py` must match;
+  CI checks both console values, including the version used by the transport's
+  User-Agent.
 
 ## Data flow: one issue
 
