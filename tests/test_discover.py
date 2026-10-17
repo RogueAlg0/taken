@@ -357,6 +357,22 @@ def test_score_candidate_explains(monkeypatch):
     assert why == ["maintainer replied", "updated 1d ago", "repo pushed 1d ago"]
 
 
+def test_days_ago_clamps_future_timestamp_and_preserves_invalid():
+    future = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+    past = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    assert discover._days_ago(future) == 0
+    assert discover._days_ago(past) == 2
+    assert discover._days_ago("not-a-timestamp") is None
+
+
+def test_score_candidate_clamps_future_timestamps():
+    future = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+    findings = {"repo_health": {"pushed_at": future}}
+    points, why = discover.score_candidate(findings, future, False)
+    assert points == 3
+    assert why == ["updated 0d ago", "repo pushed 0d ago"]
+
+
 def test_discover_parallel_matches_sequential(faked):
     seq = discover.discover(discover.DiscoverOptions(label="good first issue", jobs=1))
     par = discover.discover(discover.DiscoverOptions(label="good first issue", jobs=8))
