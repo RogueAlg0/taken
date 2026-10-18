@@ -154,7 +154,6 @@ def test_no_failures_no_notes(monkeypatch, webshim):
     assert "octo/repo#8" in out
 
 
-
 def test_webshim_score_candidate_clamps_future_timestamps(webshim):
     future = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
     past = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
