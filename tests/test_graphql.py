@@ -5,6 +5,7 @@ import http.client
 import json
 import os
 import subprocess
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import pytest
@@ -67,7 +68,7 @@ def _repo_node(**over):
         "ai4": None,
         "mergedPRs": {
             "pageInfo": {"hasNextPage": False, "endCursor": None},
-            "nodes": [{"mergedAt": "2026-09-20T00:00:00Z"}],
+            "nodes": [{"mergedAt": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()}],
         },
         "defaultBranchRef": {
             "target": {
