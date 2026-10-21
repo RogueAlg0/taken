@@ -53,6 +53,60 @@ def test_non_dict_issue_response_raises(monkeypatch):
         checks.check_issue("octo", "repo", 1)
 
 
+@pytest.mark.parametrize("field", ["labels", "assignees"])
+def test_null_issue_collection_is_empty(monkeypatch, field):
+    response = {
+        "state": "open",
+        "title": "x",
+        "labels": [{"name": "good first issue"}],
+        "assignees": [{"login": "alice"}],
+        "comments": 0,
+        "user": {"login": "someone"},
+        "html_url": "https://github.com/octo/repo/issues/1",
+        "created_at": "2026-10-20T00:00:00Z",
+    }
+    response[field] = None
+    calls = []
+
+    def fake(endpoint, params=None):
+        calls.append(endpoint)
+        return response
+
+    monkeypatch.setattr(checks, "gh_api", fake)
+    facts = checks.check_issue("octo", "repo", 1)
+
+    assert calls == ["repos/octo/repo/issues/1"]
+    assert facts["labels"] == ([] if field == "labels" else ["good first issue"])
+    assert facts["assignees"] == ([] if field == "assignees" else ["alice"])
+
+
+@pytest.mark.parametrize("field", ["labels", "assignees"])
+def test_null_issue_collection_in_search_payload_falls_back_to_get(monkeypatch, field):
+    response = {
+        "state": "open",
+        "title": "x",
+        "labels": [{"name": "good first issue"}],
+        "assignees": [{"login": "alice"}],
+        "comments": 0,
+        "user": {"login": "someone"},
+        "html_url": "https://github.com/octo/repo/issues/1",
+        "created_at": "2026-10-20T00:00:00Z",
+    }
+    response[field] = None
+    calls = []
+
+    def fake(endpoint, params=None):
+        calls.append(endpoint)
+        return response
+
+    monkeypatch.setattr(checks, "gh_api", fake)
+    facts = checks.check_issue("octo", "repo", 1, payload=response)
+
+    assert calls == ["repos/octo/repo/issues/1"]
+    assert facts["labels"] == ([] if field == "labels" else ["good first issue"])
+    assert facts["assignees"] == ([] if field == "assignees" else ["alice"])
+
+
 def test_non_dict_contributing_response_raises(monkeypatch):
     monkeypatch.setattr(checks, "gh_api", lambda endpoint, params=None: ["a", "directory"])
     with pytest.raises(checks.TakenError):
