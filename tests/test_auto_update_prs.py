@@ -163,8 +163,33 @@ def test_failures_are_surfaced_not_silent(monkeypatch, capsys):
     assert "#7 (409: " in out
     assert "#8 (unreadable (403))" in out
     assert "#9 (mergeability still unknown)" in out
+    assert out.count("PR #8: skipped") == 1
+    summary = next(line for line in out.splitlines() if line.startswith("done:"))
+    assert summary.count("#8 (") == 1
     # No update-branch PUT for the PRs that could not be examined.
     assert [c[1] for c in http.puts()] == [f"{UPDATE}/7/update-branch"]
+
+
+@pytest.mark.parametrize("status", [403, 404, 500])
+@pytest.mark.parametrize("unknown_first", [False, True])
+def test_unreadable_pr_is_skipped_once(monkeypatch, capsys, status, unknown_first):
+    mod = load_script(monkeypatch)
+    monkeypatch.setattr(mod, "MERGEABILITY_SLEEP", 0)
+    monkeypatch.setattr(mod, "list_open_prs", lambda: iter([pr(8), pr(9)]))
+    responses = [(status, {"error": "unreadable"}), (200, detail(9, "behind"))]
+    if unknown_first:
+        responses.insert(0, (200, detail(8, "unknown")))
+    responses = iter(responses)
+    monkeypatch.setattr(mod, "api", lambda *args: next(responses))
+
+    behind, skipped = mod.behind_prs()
+
+    assert behind == [(9, "sha9")]
+    assert skipped == [(8, f"unreadable ({status})")]
+    assert capsys.readouterr().out.splitlines() == [f"PR #8: skipped (unreadable ({status}))"]
+    assert mod.summarize(0, skipped) == (
+        f"done: 0 PR branch(es) updated; skipped: #8 (unreadable ({status}))"
+    )
 
 
 def test_draft_prs_are_reported_as_skipped(monkeypatch, capsys):
