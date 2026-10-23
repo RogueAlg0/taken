@@ -72,9 +72,9 @@ second fragment for one issue and a change with no issue number.
 
 ## Style
 
-- Keep runtime dependencies minimal. `tqdm` (progress bar) and `mcp` (the MCP
-  server SDK) are the only two; anything new must justify its weight. Dev
-  tools (ruff, pytest) live in the uv dev group.
+- Keep runtime dependencies minimal. `httpx` (HTTP transport), `tqdm` (progress
+  bar), and `mcp` (the MCP server SDK) are the only three; anything new must
+  justify its weight. Dev tools (ruff, pytest) live in the uv dev group.
 - Small functions, plain names, no cleverness. The verdict logic in
   `taken/verdict.py` should stay easy to audit.
 - If you change verdict behavior, update the tests in `tests/` and the "How
