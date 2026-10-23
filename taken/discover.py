@@ -93,6 +93,19 @@ def _thread_graphql_session():
     return graphql.thread_session()
 
 
+def check_label(label):
+    """Raise ValueError if `label` cannot be put inside a quoted search term.
+
+    GitHub search has no escape for a double quote inside a quoted value,
+    so a label like `help" OR repo:x` would end the quotes early and the
+    rest would be read as query syntax (issue #334).
+    """
+    if '"' in label:
+        raise ValueError(
+            f"label {label!r} contains a double quote, which a search query can't hold"
+        )
+
+
 def build_query(labels, language=None, updated_after=None):
     """Build a search/issues query matching any of the given labels.
 
@@ -101,9 +114,14 @@ def build_query(labels, language=None, updated_after=None):
     covers every label instead of one call per label (GitHub's secondary
     rate limits throttle burst velocity, not budget, and the old per-label
     loop died 12.5s into a cold run with zero verdicts).
+
+    Raises ValueError for a label check_label() refuses, rather than
+    sending a query that searches for something else.
     """
     if isinstance(labels, str):
         labels = [labels]
+    for lab in labels:
+        check_label(lab)
     label_part = ",".join(f'"{lab}"' for lab in labels)
     parts = ["is:open", "is:issue", "no:assignee", f"label:{label_part}"]
     if updated_after:

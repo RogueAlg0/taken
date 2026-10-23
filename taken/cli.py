@@ -395,6 +395,11 @@ def _read_targets_file(args, targets):
 def _run_discover_command(parser, args):
     if args.targets or args.file:
         parser.error("--discover takes no targets")
+    if args.label is not None:
+        try:
+            discover.check_label(args.label)
+        except ValueError as exc:
+            parser.error(f"argument --label: {exc}")
     return _run_with_stats(run_discover, args, verbose=args.verbose, debug=args.debug)
 
 
