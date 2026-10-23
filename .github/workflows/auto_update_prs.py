@@ -113,6 +113,8 @@ def behind_prs():
             print(f"PR #{number}: skipped ({reason})")
             skipped.append((number, reason))
             continue
+        if status != 200:
+            continue
         if state == "behind":
             behind.append((number, head_sha))
         else:
