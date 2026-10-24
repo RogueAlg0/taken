@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "label": "hotspots",
-  "message": "5 need attention",
+  "message": "6 need attention",
   "color": "orange",
   "files": [
     {
@@ -27,6 +27,12 @@
       "cc": 117,
       "commits": 29,
       "hotspot": 3393
+    },
+    {
+      "file": "taken/health.py",
+      "cc": 108,
+      "commits": 5,
+      "hotspot": 540
     },
     {
       "file": "taken/verdict.py",
