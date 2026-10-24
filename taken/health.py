@@ -364,10 +364,11 @@ def _comment_budget_spent():
 def repo_health(owner, repo, options=None, me=None, now=None):
     """Build the maintainer health report for a repo. Read-only.
 
-    Fetches the open-issue listing once, then one comment listing per
-    issue with comments (shared by the claim scan and the untriaged
-    scan), plus the open-PR listing. Issues whose listing already shows
-    zero comments skip the fetch. A TakenError on one issue's comments
+    Fetches up to one issue beyond the configured report limit to
+    distinguish a complete listing from a genuinely truncated one, then
+    one comment listing per issue with comments (shared by the claim scan
+    and the untriaged scan), plus the open-PR listing. Issues whose listing
+    already shows zero comments skip the fetch. A TakenError on one issue's comments
     fails that issue closed without aborting the report, the way
     _verify_candidate does per candidate. When the API budget is nearly
     spent, the loop skips each fetch it still owes and the report says
@@ -377,12 +378,14 @@ def repo_health(owner, repo, options=None, me=None, now=None):
     """
     options = options or HealthOptions()
     now = now or datetime.now(timezone.utc)
-    issues = checks.list_open_issues(owner, repo, limit=options.issue_limit)
-    report = RepoHealth(
-        owner=owner,
-        repo=repo,
-        truncated=len(issues) >= options.issue_limit,
-    )
+    issue_limit = options.issue_limit
+    # Probe one beyond the report cap: reaching the cap alone does not prove
+    # that more open issues exist.
+    issues = checks.list_open_issues(owner, repo, limit=issue_limit + 1)
+    truncated = len(issues) > issue_limit
+    if truncated:
+        issues = issues[:issue_limit]
+    report = RepoHealth(owner=owner, repo=repo, truncated=truncated)
     for item in issues:
         number = item["number"]
         if not item.get("comments"):
