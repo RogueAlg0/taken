@@ -334,11 +334,24 @@ def test_to_dict_keys(monkeypatch):
     assert data["pr_scan_failed"] is False
 
 
-def test_truncated_when_issue_limit_hit(monkeypatch):
+def test_exact_issue_limit_is_not_truncated(monkeypatch):
     issues = (make_issue(1, 1), make_issue(2, 2))
     monkeypatch.setattr(checks, "gh_api", make_gh(issues))
-    assert run(issues, options=HealthOptions(issue_limit=2)).truncated is True
+    assert run(issues, options=HealthOptions(issue_limit=2)).truncated is False
     assert run(issues, options=HealthOptions(issue_limit=5)).truncated is False
+
+
+def test_truncated_only_when_more_issues_exist(monkeypatch):
+    issues = (
+        make_issue(1, 1),
+        make_issue(2, 2),
+        make_issue(3, 40, labels=["good first issue"]),
+    )
+    monkeypatch.setattr(checks, "gh_api", make_gh(issues))
+    report = run(issues, options=HealthOptions(issue_limit=2))
+    assert report.truncated is True
+    # The extra issue is only a truncation probe and must not enter the report.
+    assert report.stale_beginner_labels == []
 
 
 # Failure isolation (issue #331)
