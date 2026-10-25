@@ -91,3 +91,17 @@ def test_mcp_numeric_parameters_reject_negative_values(monkeypatch, tool, parame
     coro = mcp.call_tool(tool, {**REQUIRED_ARGUMENTS[tool], parameter: -5})
     with pytest.raises(ToolError, match="greater than or equal to 0"):
         asyncio.run(coro)
+
+
+def test_mcp_discover_label_rejects_a_double_quote(monkeypatch):
+    # Not numeric, but the same boundary check: a quote in the label would
+    # break out of the quoted search term (issue #334).
+    def no_api_calls(*args, **kwargs):
+        raise AssertionError("a quoted label must be rejected before any API call")
+
+    monkeypatch.setattr(checks, "gh_api", no_api_calls)
+    monkeypatch.setattr(discover, "discover", no_api_calls)
+
+    coro = mcp.call_tool("discover_candidates", {"label": 'help" OR repo:x'})
+    with pytest.raises(ToolError, match="should match pattern"):
+        asyncio.run(coro)
