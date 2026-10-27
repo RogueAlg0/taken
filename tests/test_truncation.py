@@ -2,8 +2,21 @@
 never produce a silent GO. A truncated timeline or comment scan downgrades
 the verdict to CAUTION on both the REST and GraphQL fetch paths."""
 
+from datetime import datetime, timedelta, timezone
+
 from taken import budget, checks, graphql
 from taken.verdict import CAUTION, GO, decide
+
+
+def _ts(days_ago):
+    """Fixture timestamp relative to now, so fixtures never go stale."""
+    dt = datetime.now(timezone.utc) - timedelta(days=days_ago)
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _day(days_ago):
+    dt = datetime.now(timezone.utc) - timedelta(days=days_ago)
+    return dt.strftime("%Y-%m-%d")
 
 
 def _issue_dict():
@@ -15,12 +28,12 @@ def _issue_dict():
         "comments": 0,
         "user": {"login": "someone"},
         "html_url": "https://github.com/o/r/issues/1",
-        "created_at": "2026-09-01T00:00:00Z",
+        "created_at": _ts(30),
     }
 
 
 def _repo_dict():
-    return {"pushed_at": "2026-09-26T00:00:00Z", "stargazers_count": 1}
+    return {"pushed_at": _ts(5), "stargazers_count": 1}
 
 
 def _quiet_run_checks_fake(monkeypatch, *, timeline_pages=1, comment_pages=1):
@@ -44,7 +57,7 @@ def _quiet_run_checks_fake(monkeypatch, *, timeline_pages=1, comment_pages=1):
                     {
                         "user": {"login": f"user{i}"},
                         "body": "nice idea, thanks",
-                        "created_at": "2026-09-01T00:00:00Z",
+                        "created_at": _ts(30),
                     }
                     for i in range(100)
                 ]
@@ -73,7 +86,7 @@ def _go_findings(**over):
         "claimants": [],
         "ai_policy": {"verdict": "none-found", "snippet": "", "source": None},
         "repo_health": {
-            "pushed_at": "2026-09-26",
+            "pushed_at": _day(5),
             "pushed_recently": True,
             "recent_merges": 1,
             "contributors": 3,
@@ -178,7 +191,7 @@ def test_graphql_findings_flag_truncated_timeline(monkeypatch):
             "state": "OPEN",
             "title": "Some issue",
             "url": "https://github.com/o/r/issues/1",
-            "createdAt": "2026-09-01T00:00:00Z",
+            "createdAt": _ts(30),
             "author": {"login": "someone"},
             "assignees": {"nodes": []},
             "labels": {"nodes": []},
@@ -195,7 +208,7 @@ def test_graphql_findings_flag_truncated_timeline(monkeypatch):
         return {
             "data": {
                 "repository": {
-                    "pushedAt": "2026-09-26T00:00:00Z",
+                    "pushedAt": _ts(5),
                     "issue": issue,
                     "ai1": None,
                     "ai2": None,
