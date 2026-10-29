@@ -2,6 +2,8 @@
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from taken import checks, health
 from taken.health import HealthOptions, repo_health
 
@@ -210,6 +212,26 @@ def test_pr_draft_flagged(monkeypatch):
     assert "(draft)" in health.format_health_human(report)
 
 
+@pytest.mark.parametrize("pull_count", [0, 99, 100])
+@pytest.mark.parametrize("idle_days", [1, 20])
+def test_pr_scan_truncation_survives_stale_filtering(monkeypatch, pull_count, idle_days):
+    """A full capped PR page warns even when none of its PRs are stale."""
+    pulls = [make_pr(number, idle_days) for number in range(1, pull_count + 1)]
+    monkeypatch.setattr(checks, "MAX_SCAN_PAGES", 1)
+    monkeypatch.setattr(checks, "gh_api", make_gh(pulls=pulls))
+
+    report = run()
+    expected = pull_count == 100
+    assert report.pr_scan_truncated is expected
+    assert report.truncated is False  # The issue listing is complete.
+    assert report.pr_scan_failed is False
+    assert len(report.stale_prs) == (pull_count if idle_days == 20 else 0)
+    assert health.health_to_dict(report)["pr_scan_truncated"] is expected
+    text = health.format_health_human(report)
+    assert ("PR scan hit the listing cap" in text) is expected
+    assert "issue scan hit the listing cap" not in text
+
+
 # Stale beginner labels
 
 
@@ -327,11 +349,13 @@ def test_to_dict_keys(monkeypatch):
         "comment_fetch_errors",
         "comment_fetch_skipped",
         "pr_scan_failed",
+        "pr_scan_truncated",
     }
     assert data["waiting_claims"][0]["claimant"] == "alice"
     assert data["comment_fetch_errors"] == []
     assert data["comment_fetch_skipped"] == []
     assert data["pr_scan_failed"] is False
+    assert data["pr_scan_truncated"] is False
 
 
 def test_exact_issue_limit_is_not_truncated(monkeypatch):
@@ -350,6 +374,7 @@ def test_truncated_only_when_more_issues_exist(monkeypatch):
     monkeypatch.setattr(checks, "gh_api", make_gh(issues))
     report = run(issues, options=HealthOptions(issue_limit=2))
     assert report.truncated is True
+    assert report.pr_scan_truncated is False
     # The extra issue is only a truncation probe and must not enter the report.
     assert report.stale_beginner_labels == []
 
@@ -501,6 +526,7 @@ def test_pr_scan_failure_degrades(monkeypatch):
     monkeypatch.setattr(checks, "gh_api", make_failing_gh(issues, comments, fail_pulls=True))
     report = run(issues, comments)
     assert report.pr_scan_failed is True
+    assert report.pr_scan_truncated is False
     assert report.stale_prs == []
     assert [c.number for c in report.waiting_claims] == [1]
     text = health.format_health_human(report)
