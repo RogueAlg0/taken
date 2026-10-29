@@ -30,9 +30,9 @@
     },
     {
       "file": "taken/health.py",
-      "cc": 108,
-      "commits": 5,
-      "hotspot": 540
+      "cc": 109,
+      "commits": 6,
+      "hotspot": 654
     },
     {
       "file": "taken/verdict.py",
