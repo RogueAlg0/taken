@@ -111,6 +111,11 @@ A clean issue, with your own volunteering comment filtered out:
 
 `taken --help` lists everything.
 
+Health reports warn when either the issue listing or the PR listing reaches
+its scan cap. With `--health --json`, `truncated` describes the issue listing
+and `pr_scan_truncated` describes the PR listing; stale PR counts may be
+incomplete when the latter is true.
+
 ## Batch mode and repo scans
 
 Give `taken` several targets and it prints one verdict line per target:

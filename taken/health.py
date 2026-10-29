@@ -116,6 +116,7 @@ class RepoHealth:
     comment_fetch_errors: list = field(default_factory=list)  # issue numbers
     comment_fetch_skipped: list = field(default_factory=list)  # issue numbers
     pr_scan_failed: bool = False
+    pr_scan_truncated: bool = False  # PR listing hit the page cap; more may exist
 
     def summary(self):
         oldest = max((c.age_days for c in self.waiting_claims), default=None)
@@ -273,13 +274,13 @@ def _pr_band(idle_days):
 
 
 def _scan_prs(owner, repo, options, now):
-    """Open PRs idle for at least pr_stale_days, stalest first.
+    """(Stale open PRs, truncated), with PRs ordered stalest first.
 
     Listed oldest-updated first so the scan cap keeps the stalest PRs,
     not the freshest.
     """
     endpoint = f"repos/{owner}/{repo}/pulls"
-    prs, _truncated = checks._paged_list(
+    prs, truncated = checks._paged_list(
         endpoint, {"state": "open", "sort": "updated", "direction": "asc"}
     )
     stale = []
@@ -298,7 +299,7 @@ def _scan_prs(owner, repo, options, now):
                 draft=bool(pr.get("draft")),
             )
         )
-    return stale
+    return stale, truncated
 
 
 def _scan_beginner_labels(issues, options, now):
@@ -415,7 +416,7 @@ def repo_health(owner, repo, options=None, me=None, now=None):
     report.quiet_claims.sort(key=lambda c: -c.quiet_days)
     report.untriaged.sort(key=lambda e: -(e.age_days or 0))
     try:
-        report.stale_prs = _scan_prs(owner, repo, options, now)
+        report.stale_prs, report.pr_scan_truncated = _scan_prs(owner, repo, options, now)
     except checks.TakenError:
         # The PR scan is one call chain: lose it, not the report.
         report.pr_scan_failed = True
@@ -438,6 +439,7 @@ def health_to_dict(report):
         "comment_fetch_errors": list(report.comment_fetch_errors),
         "comment_fetch_skipped": list(report.comment_fetch_skipped),
         "pr_scan_failed": report.pr_scan_failed,
+        "pr_scan_truncated": report.pr_scan_truncated,
     }
 
 
@@ -458,6 +460,9 @@ def format_health_human(report):
     ]
     if report.truncated:
         lines.append("note: issue scan hit the listing cap; more issues may exist")
+        lines.append("")
+    if report.pr_scan_truncated:
+        lines.append("note: PR scan hit the listing cap; more stale PRs may exist")
         lines.append("")
     if report.comment_fetch_errors:
         nums = ", ".join(f"#{n}" for n in report.comment_fetch_errors)
