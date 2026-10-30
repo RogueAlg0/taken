@@ -54,6 +54,15 @@ def _non_negative_int(value):
     return number
 
 
+def _effective_limit(args, default):
+    """Explicit --limit, or the mode's default when the flag was not passed.
+
+    The parser default is None so each mode can apply its own default:
+    an explicit --limit always wins, whatever the mode.
+    """
+    return args.limit if args.limit is not None else default
+
+
 def _probability(value):
     number = float(value)
     if not 0.0 <= number <= 1.0:
@@ -99,11 +108,12 @@ def build_parser():
     parser.add_argument(
         "--limit",
         type=_non_negative_int,
-        default=20,
+        default=None,
         metavar="N",
         help=(
-            "max open issues to check per scan target, or max candidates to return "
-            "in --discover mode (default: 20)"
+            "max open issues to check per scan target, max candidates to return "
+            "in --discover mode, or max issues listed in --health mode "
+            "(default: 20; 100 in --health mode)"
         ),
     )
     parser.add_argument(
@@ -538,7 +548,7 @@ def _log_searched(searched):
 
 def _discover_options(args, bar):
     return discover.DiscoverOptions(
-        limit=args.limit,
+        limit=_effective_limit(args, 20),
         language=args.language,
         label=args.label,
         min_contributors=args.min_contributors,
@@ -755,6 +765,7 @@ def run_health(owner, repo, args):
         claim_wait_days=args.claim_wait_days,
         pr_stale_days=args.pr_stale_days,
         gfi_stale_days=args.gfi_stale_days,
+        issue_limit=_effective_limit(args, health.DEFAULT_ISSUE_LIMIT),
     )
     try:
         report = health.repo_health(owner, repo, options=options, me=args.me)
@@ -791,7 +802,9 @@ def format_batch_line(target, verdict, reasons):
 def _expand_repo_target(text, owner, repo, args, jobs):
     """List a repo's open issues into jobs. Returns True when it failed."""
     try:
-        issues = checks.list_open_issues(owner, repo, limit=args.limit, label=args.label)
+        issues = checks.list_open_issues(
+            owner, repo, limit=_effective_limit(args, 20), label=args.label
+        )
     except checks.TakenError as exc:
         print(f"error: {text}: {exc}", file=sys.stderr)
         return True
