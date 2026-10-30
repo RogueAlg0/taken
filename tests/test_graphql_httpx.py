@@ -294,7 +294,7 @@ def test_fetch_mode_httpx_selection(clean_env, monkeypatch):
     # The rest escape hatch still wins over the httpx opt-in.
     with mock.patch.dict(os.environ, {"TAKEN_GRAPHQL_TRANSPORT": "httpx", "TAKEN_REST": "1"}):
         assert graphql.fetch_mode(_args()) == "rest"
-    # The persistent session still wins over everything.
+    # The persistent session still wins over the httpx opt-in.
     with mock.patch.dict(
         os.environ,
         {"TAKEN_GRAPHQL_TRANSPORT": "httpx", "TAKEN_PERSISTENT_SESSION": "1"},

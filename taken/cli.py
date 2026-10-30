@@ -248,7 +248,8 @@ def build_parser():
         "--persistent-session",
         action="store_true",
         help="GraphQL over one persistent HTTPS connection for the process; "
-        "token from `gh auth token` is held in memory only. Opt-in.",
+        "token from `gh auth token` is held in memory only. Opt-in "
+        "(or TAKEN_PERSISTENT_SESSION=1); --rest still wins.",
     )
     parser.add_argument(
         "--pr-idle-days",
