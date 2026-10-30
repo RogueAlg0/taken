@@ -157,10 +157,19 @@ def test_fetch_mode_persistent_wins(monkeypatch):
     assert graphql.fetch_mode(_args(persistent_session=True)) == "persistent"
     with mock.patch.dict(os.environ, {"TAKEN_PERSISTENT_SESSION": "1"}):
         assert graphql.fetch_mode(_args(graphql=True)) == "persistent"
-    # Persistent still wins over the rest escape hatch: it is the most
-    # explicit opt-in.
+
+
+def test_fetch_mode_rest_beats_persistent(monkeypatch):
+    _logged_in(monkeypatch)
+    # The rest escape hatch wins even over the persistent session, so an
+    # exported TAKEN_PERSISTENT_SESSION=1 never locks REST out.
+    assert graphql.fetch_mode(_args(persistent_session=True, rest=True)) == "rest"
     with mock.patch.dict(os.environ, {"TAKEN_PERSISTENT_SESSION": "1", "TAKEN_REST": "1"}):
-        assert graphql.fetch_mode(_args()) == "persistent"
+        assert graphql.fetch_mode(_args()) == "rest"
+    with mock.patch.dict(os.environ, {"TAKEN_PERSISTENT_SESSION": "1"}):
+        assert graphql.fetch_mode(_args(rest=True)) == "rest"
+    with mock.patch.dict(os.environ, {"TAKEN_REST": "1"}):
+        assert graphql.fetch_mode(_args(persistent_session=True)) == "rest"
 
 
 # --- error handling --------------------------------------------------------

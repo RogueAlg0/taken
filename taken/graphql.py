@@ -157,10 +157,11 @@ def fetch_mode(args=None):
 
     Selection order (first match wins):
 
-    1. explicit persistent (``--persistent-session`` /
+    1. explicit rest (``--rest`` / ``TAKEN_REST=1``): the escape hatch, and
+       it beats every GraphQL choice, the persistent session included, so
+       there is always a way to force REST
+    2. explicit persistent (``--persistent-session`` /
        ``TAKEN_PERSISTENT_SESSION=1``)
-    2. explicit rest (``--rest`` / ``TAKEN_REST=1``): the escape hatch, and
-       it beats ``--graphql`` so there is always a way to force REST
     3. explicit httpx GraphQL (``TAKEN_GRAPHQL_TRANSPORT=httpx``): upgrades
        the GraphQL choice to the httpx transport
     4. explicit graphql (``--graphql`` / ``TAKEN_GRAPHQL=1``)
@@ -173,10 +174,10 @@ def fetch_mode(args=None):
     flag_graphql = bool(args and getattr(args, "graphql", False))
     flag_persistent = bool(args and getattr(args, "persistent_session", False))
     flag_rest = bool(args and getattr(args, "rest", False))
-    if flag_persistent or os.environ.get("TAKEN_PERSISTENT_SESSION") == "1":
-        return "persistent"
     if flag_rest or os.environ.get("TAKEN_REST") == "1":
         return "rest"
+    if flag_persistent or os.environ.get("TAKEN_PERSISTENT_SESSION") == "1":
+        return "persistent"
     if use_httpx_graphql():
         return "httpx"
     if flag_graphql or os.environ.get("TAKEN_GRAPHQL") == "1":
