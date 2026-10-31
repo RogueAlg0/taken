@@ -13,6 +13,7 @@ import argparse
 import os
 import sys
 import types
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import httpx
@@ -365,10 +366,13 @@ def test_graphql_via_httpx_retries_rate_limit(clean_env, monkeypatch):
 
 
 def _canned_issue_payload():
+    # Date-proof the fixture: a fixed pushedAt ages past the 30-day dormancy
+    # line and flips pushed_recently (same pattern as test_discover.py).
+    pushed_at = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {
         "data": {
             "repository": {
-                "pushedAt": "2026-10-01T00:00:00Z",
+                "pushedAt": pushed_at,
                 "issue": {
                     "state": "OPEN",
                     "title": "Test issue",
