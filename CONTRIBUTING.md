@@ -65,7 +65,10 @@ second fragment for one issue and a change with no issue number.
   `taken/transport.py` for the in-browser docs console. If you touch any of
   those files, re-copy them into `docs/console/py/`:
   `cp taken/checks.py taken/verdict.py taken/budget.py taken/transport.py docs/console/py/`.
-  CI checks the copies are in sync and fails the PR otherwise.
+  CI checks the copies are in sync and fails the PR otherwise. The CLI
+  reference `docs/takendocs.md` is generated the same way: after changing a
+  flag or its help text, run `uv run python scripts/gen_cli_reference.py` and
+  commit the result. CI regenerates the page and fails the PR when it differs.
 - **The tool is read-only by design.** It must never write anything to the
   GitHub API: no comments, no labels, no state changes, only GET requests.
   Keep it that way.

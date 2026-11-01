@@ -76,6 +76,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       - name: Check vendored docs copies match taken/
         run: |
           fail=0
@@ -89,6 +91,14 @@ jobs:
           done
           if [ "$fail" -ne 0 ]; then
             echo 'Re-copy with: cp taken/checks.py docs/console/py/checks.py && cp taken/verdict.py docs/console/py/verdict.py && cp taken/budget.py docs/console/py/budget.py && cp taken/transport.py docs/console/py/transport.py'
+            exit 1
+          fi
+      - name: Check docs/takendocs.md matches taken --help
+        run: |
+          uv run --frozen python scripts/gen_cli_reference.py
+          if ! git diff --exit-code -- docs/takendocs.md; then
+            echo '::error::docs/takendocs.md is out of date with the CLI'
+            echo 'Regenerate with: uv run python scripts/gen_cli_reference.py'
             exit 1
           fi
       - name: Check webshim version matches package version

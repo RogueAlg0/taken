@@ -10,8 +10,12 @@ Auto-generated CLI reference for `taken`. Regenerate with
 ```text
 usage: taken [-h] [--file PATH] [--limit N] [--label LABEL] [--discover]
              [--language LANG] [--min-contributors N] [--jobs N]
-             [--no-progress] [--json] [--verbose] [--debug] [--me LOGIN]
-             [--no-cache] [--clear-cache] [--graphql] [--persistent-session]
+             [--no-progress] [--allocation {bandit,recency}]
+             [--explore-floor P] [--health] [--claim-wait-days N]
+             [--pr-stale-days N] [--gfi-stale-days N] [--json] [--verbose]
+             [--debug] [--me LOGIN] [--no-cache] [--clear-cache] [--graphql]
+             [--rest] [--persistent-session] [--pr-idle-days N]
+             [--claim-silence-days N] [--claim-silence-complex-days N]
              [--version]
              [targets ...]
 
@@ -38,6 +42,24 @@ options:
   --jobs N              discover: verify candidates with N parallel workers
                         (default: 8)
   --no-progress         discover: hide the progress bar
+  --allocation {bandit,recency}
+                        discover: how verify budget is split across repos:
+                        'bandit' spends it by Thompson sampling on each repo's
+                        observed GO yield (default), 'recency' verifies
+                        freshest first
+  --explore-floor P     discover: probability a bandit pick explores uniformly
+                        instead of following sampled yields (default: 0.15)
+  --health              report maintainer-facing repo health for one
+                        owner/repo target (claims waiting, stale PRs, stale
+                        beginner labels, untriaged issues); read-only, no
+                        verdicts
+  --claim-wait-days N   health: a claim with no maintainer reply counts as
+                        waiting after N days; a claim gone quiet after a
+                        maintainer reply counts after N days (default: 7)
+  --pr-stale-days N     health: an open PR counts as stale after N days
+                        without activity (default: 14)
+  --gfi-stale-days N    health: a good first issue or hacktoberfest label
+                        counts as stale after N days untouched (default: 30)
   --json                print the full findings as JSON
   --verbose             print an API usage summary (calls per endpoint, cache
                         hits/misses) to stderr at the end of the run
@@ -51,11 +73,26 @@ options:
   --no-cache            bypass the API response cache (~/.cache/taken, 1h TTL)
   --clear-cache         delete the API response cache (~/.cache/taken) and
                         exit
-  --graphql             fetch issue data via one GraphQL query per issue (gh
-                        api graphql) instead of REST; opt-in, same verdicts
+  --graphql             force the GraphQL fetch path even when not logged in
+                        to GitHub (falls back to REST on failure); the default
+                        for logged-in users
+  --rest                force the REST fetch path even when logged in to
+                        GitHub; escape hatch for the GraphQL default (or
+                        TAKEN_REST=1)
   --persistent-session  GraphQL over one persistent HTTPS connection for the
                         process; token from `gh auth token` is held in memory
-                        only. Opt-in.
+                        only. Opt-in (or TAKEN_PERSISTENT_SESSION=1); --rest
+                        still wins.
+  --pr-idle-days N      stale-claim decay: an open linked PR with no activity
+                        for longer than N days weakens from TAKEN to CAUTION
+                        (default: 90)
+  --claim-silence-days N
+                        stale-claim decay: days one claim blocks as CAUTION on
+                        a simple issue; the clock resets on any claimant
+                        activity (default: 7)
+  --claim-silence-complex-days N
+                        stale-claim decay: days one claim blocks as CAUTION on
+                        a complex issue (default: 14)
   --version             show program's version number and exit
 ```
 
