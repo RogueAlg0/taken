@@ -473,6 +473,17 @@ def search_issues(query, per_page=50):
     This is the same source the web aggregators use; we piggyback on it for
     candidates and do our own verification and ranking on top.
     """
+    items, _total = search_issues_page(query, per_page=per_page)
+    return items
+
+
+def search_issues_page(query, per_page=50):
+    """Search issues and return (items, total_count).
+
+    items is the one page the API returned (at most per_page); total_count
+    is the number of matches the API reports, which can be far larger.
+    total_count is None when the response has no integer there.
+    """
     data = _require_dict(
         gh_api(
             "search/issues",
@@ -483,7 +494,10 @@ def search_issues(query, per_page=50):
     items = data.get("items")
     if not isinstance(items, list):
         raise TakenError("search/issues returned an unexpected response")
-    return items
+    total = data.get("total_count")
+    if not isinstance(total, int) or isinstance(total, bool):
+        total = None
+    return items, total
 
 
 def _require_list(value, endpoint):

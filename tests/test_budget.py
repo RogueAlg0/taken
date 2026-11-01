@@ -172,7 +172,7 @@ def test_discover_pool_grows_when_authenticated(monkeypatch):
     items = [
         {"number": i, "repository_url": "https://api.github.com/repos/o/r"} for i in range(100)
     ]
-    monkeypatch.setattr(checks, "search_issues", lambda *a, **k: items)
+    monkeypatch.setattr(checks, "search_issues_page", lambda *a, **k: (items, len(items)))
     budget.activate(identity=None)
     candidates, _, _ = discover._collect_candidates(["good first issue"], None, "2026-01-01")
     assert len(candidates) == 40

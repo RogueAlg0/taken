@@ -41,8 +41,10 @@ class DiscoverOptions:
     on_progress: called as on_progress(done, total) from the calling
         thread as each candidate finishes, so callers can drive a
         progress bar.
-    on_searched: called as on_searched([(label, count)]) after the search
-        phase, so callers can report what was searched.
+    on_searched: called as on_searched([(label, count, total)]) after the
+        search phase, so callers can report what was searched. count is the
+        length of the page that was read; total is the search API's
+        total_count (None when the response has none), often much larger.
     mode: verification fetch path: "rest" (default), "graphql", "httpx",
         or "persistent" (see graphql.fetch_mode).
     thresholds: stale-claim decay settings (issue #83); None means the
@@ -358,18 +360,19 @@ def _collect_candidates(labels, language, updated_after):
     error, never a silent empty success.
 
     Returns (candidates, searched, search_errors): the pool capped at
-    VERIFY_POOL; a [(labels, count)] list so callers can report what was
-    searched (one entry for the combined query, one per label on the
-    fallback path); and a [(label, error)] list for labels whose fallback
+    VERIFY_POOL; a [(labels, count, total)] list so callers can report what
+    was searched (one entry for the combined query, one per label on the
+    fallback path; count is the page length, total the API's total_count);
+    and a [(label, error)] list for labels whose fallback
     search failed, empty on the normal path.
     """
     query = build_query(labels, language=language, updated_after=updated_after)
     try:
-        items = checks.search_issues(query, per_page=SEARCH_PER_PAGE)
+        items, total = checks.search_issues_page(query, per_page=SEARCH_PER_PAGE)
     except checks.TakenError:
         return _collect_candidates_per_label(labels, language, updated_after)
     candidates = _pool_from_items(items, set(), _verify_pool_size())
-    searched = [(", ".join(labels), len(items))]
+    searched = [(", ".join(labels), len(items), total)]
     return candidates, searched, []
 
 
@@ -388,11 +391,11 @@ def _collect_candidates_per_label(labels, language, updated_after):
     for label in labels:
         query = build_query(label, language=language, updated_after=updated_after)
         try:
-            items = checks.search_issues(query, per_page=SEARCH_PER_PAGE)
+            items, total = checks.search_issues_page(query, per_page=SEARCH_PER_PAGE)
         except checks.TakenError as exc:
             search_errors.append((label, str(exc)))
             continue
-        searched.append((label, len(items)))
+        searched.append((label, len(items), total))
         candidates.extend(_pool_from_items(items, seen, _verify_pool_size() - len(candidates)))
         if len(candidates) >= _verify_pool_size():
             break
