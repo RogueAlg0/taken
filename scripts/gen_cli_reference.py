@@ -15,6 +15,7 @@ README homepage.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -32,7 +33,10 @@ EXIT_CODE_BLURBS = {
 
 
 def main() -> int:
-    proc = subprocess.run(["taken", "--help"], capture_output=True, text=True, check=False)
+    # argparse wraps the help text to the terminal width, so pin it: the page
+    # must come out the same on every machine and in CI.
+    env = {**os.environ, "COLUMNS": "80"}
+    proc = subprocess.run(["taken", "--help"], capture_output=True, text=True, check=False, env=env)
     if proc.returncode != 0 or not proc.stdout.strip():
         print("error: `taken --help` did not produce output", file=sys.stderr)
         print(proc.stderr, file=sys.stderr)
