@@ -1428,7 +1428,8 @@ def _timeline_event_pr(event, seen):
 
 def _timeline_pr_info(pr_owner, pr_repo, pr_number):
     """Fetch a linked PR and build its info dict."""
-    pr = gh_api(f"repos/{pr_owner}/{pr_repo}/pulls/{pr_number}")
+    endpoint = f"repos/{pr_owner}/{pr_repo}/pulls/{pr_number}"
+    pr = _require_dict(gh_api(endpoint), endpoint)
     updated_at = pr.get("updated_at")
     pr_info = {
         "number": int(pr_number),
