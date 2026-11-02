@@ -1386,12 +1386,16 @@ def check_issue(owner, repo, number, payload=None):
     above, the redundant GET is skipped. An incomplete payload falls back
     to the GET, so the plain path behaves exactly as before.
     """
+    if isinstance(payload, dict) and "pull_request" in payload:
+        raise TakenError(f"{owner}/{repo}#{number} is a pull request, not an issue")
     if payload is not None:
         facts = _issue_facts_from_payload(payload, number)
         if facts is not None:
             return facts
     endpoint = f"repos/{owner}/{repo}/issues/{number}"
     data = _require_dict(gh_api(endpoint), endpoint)
+    if "pull_request" in data:
+        raise TakenError(f"{owner}/{repo}#{number} is a pull request, not an issue")
     return {
         "number": number,
         "state": data.get("state"),

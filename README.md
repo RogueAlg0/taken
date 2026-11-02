@@ -72,6 +72,9 @@ always prints its evidence so you can judge for yourself.
 Exit codes: 0 means GO, 1 means TAKEN, 2 means CAUTION, 3 means something
 broke (bad target or flag, no `gh`, API error).
 
+A pull request number is an invalid issue target: it returns an error
+(exit 3 in the CLI), without a contribution verdict.
+
 ## Examples
 
 An issue with a PR already fixing it:
