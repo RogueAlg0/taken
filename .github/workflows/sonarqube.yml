@@ -27,7 +27,7 @@ jobs:
           fetch-depth: 0
       - name: Install uv
         if: env.SONAR_TOKEN != ''
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.13"
       - name: Run tests with coverage
@@ -38,4 +38,4 @@ jobs:
         run: uv run --frozen --with pytest-cov pytest --cov=taken --cov-report=xml
       - name: SonarQube Cloud scan
         if: env.SONAR_TOKEN != ''
-        uses: sonarsource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8
+        uses: sonarsource/sonarqube-scan-action@4d1dc0c91ee400dcf8a6dddf2f705ac36542e304 # v8
