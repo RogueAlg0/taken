@@ -3,7 +3,7 @@ never degrade quietly into a GO verdict."""
 
 import pytest
 
-from taken import checks
+from taken import budget, checks
 from taken.cli import main
 
 
@@ -152,3 +152,25 @@ def test_missing_gh_binary_is_exit_3(monkeypatch):
 
     monkeypatch.setattr(checks.subprocess, "run", fake_run)
     assert main(["octo/repo#1"]) == 3
+
+
+@pytest.mark.parametrize("identity", [None, "someone"])
+@pytest.mark.parametrize("response", [None, [], "unexpected", 42])
+def test_non_object_linked_pr_response_raises(monkeypatch, identity, response):
+    endpoint = "repos/octo/repo/pulls/2"
+
+    def fake(path, params=None):
+        if path == "repos/octo/repo/issues/1/timeline":
+            return [
+                {
+                    "event": "cross-referenced",
+                    "source": {"issue": {"html_url": "https://github.com/octo/repo/pull/2"}},
+                }
+            ]
+        assert path == endpoint
+        return response
+
+    monkeypatch.setattr(checks, "gh_api", fake)
+    budget.activate(identity=identity)
+    with pytest.raises(checks.TakenError, match=f"gh api {endpoint}"):
+        checks.check_timeline("octo", "repo", 1)
