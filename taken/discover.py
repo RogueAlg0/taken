@@ -311,12 +311,15 @@ class DiscoverResults(list):
     callers can tell "partial results" apart from "everything worked".
     """
 
-    def __init__(self, items=(), *, errors=0, total=0, verified=0, search_errors=()):
+    def __init__(
+        self, items=(), *, errors=0, total=0, verified=0, search_errors=(), truncated=False
+    ):
         super().__init__(items)
         self.errors = errors
         self.total = total
         self.verified = verified
         self.search_errors = list(search_errors)
+        self.truncated = truncated
 
 
 def _pool_from_items(items, seen, limit):
@@ -340,6 +343,10 @@ def _pool_from_items(items, seen, limit):
         seen.add(key)
         candidates.append((owner, repo, item.get("number"), item))
     return candidates
+
+
+class _CandidatePool(list):
+    truncated = False
 
 
 def _collect_candidates(labels, language, updated_after):
@@ -368,7 +375,12 @@ def _collect_candidates(labels, language, updated_after):
         items = checks.search_issues(query, per_page=SEARCH_PER_PAGE)
     except checks.TakenError:
         return _collect_candidates_per_label(labels, language, updated_after)
-    candidates = _pool_from_items(items, set(), _verify_pool_size())
+    pool_size = _verify_pool_size()
+    observed = _pool_from_items(items, set(), pool_size + 1)
+    candidates = _CandidatePool(observed[:pool_size])
+    candidates.truncated = (
+        getattr(items, "truncated", len(items) >= SEARCH_PER_PAGE) or len(observed) > pool_size
+    )
     searched = [(", ".join(labels), len(items))]
     return candidates, searched, []
 
@@ -381,11 +393,11 @@ def _collect_candidates_per_label(labels, language, updated_after):
     normal path, so the fallback cannot burst into the secondary rate
     limit it is trying to recover from.
     """
-    candidates = []
+    candidates = _CandidatePool()
     searched = []
     search_errors = []
     seen = set()
-    for label in labels:
+    for index, label in enumerate(labels):
         query = build_query(label, language=language, updated_after=updated_after)
         try:
             items = checks.search_issues(query, per_page=SEARCH_PER_PAGE)
@@ -393,8 +405,14 @@ def _collect_candidates_per_label(labels, language, updated_after):
             search_errors.append((label, str(exc)))
             continue
         searched.append((label, len(items)))
-        candidates.extend(_pool_from_items(items, seen, _verify_pool_size() - len(candidates)))
+        remaining = _verify_pool_size() - len(candidates)
+        observed = _pool_from_items(items, seen, remaining + 1)
+        candidates.truncated |= (
+            getattr(items, "truncated", len(items) >= SEARCH_PER_PAGE) or len(observed) > remaining
+        )
+        candidates.extend(observed[:remaining])
         if len(candidates) >= _verify_pool_size():
+            candidates.truncated |= index + 1 < len(labels)
             break
     if not candidates and search_errors and not searched:
         # Every label failed: re-raise instead of returning an empty
@@ -481,6 +499,7 @@ class _RollingVerifier:
         self.ranked = []
         self.errors = 0
         self.verified = 0
+        self.stopped_early = False
         self.banked_scores = []
         self.ceilings = {
             idx: _score_ceiling(item.get("updated_at"))
@@ -577,6 +596,7 @@ class _RollingVerifier:
                 for future in finished:
                     done = self._consume(future, done)
                     if self.ranking_decided():
+                        self.stopped_early = bool(self.in_flight) or self.has_work()
                         # The top-`limit` ranking is decided: no remaining
                         # candidate can displace the banked top-`limit`, so
                         # the rest of the queue is never submitted. In-flight
@@ -635,11 +655,21 @@ def discover(options=None):
         options.on_searched(searched)
 
     total = len(candidates)
+    # Counts describe the observed pool; its metadata records omitted or
+    # unqueried candidates rather than assuming a full pool must be partial.
+    search_limited = getattr(candidates, "truncated", False) or bool(search_errors)
     if options.on_progress is not None:
         options.on_progress(0, total)
     if limit == 0:
         # Nothing can make the cut; skip verification entirely.
-        return DiscoverResults([], errors=0, total=total, verified=0, search_errors=search_errors)
+        return DiscoverResults(
+            [],
+            errors=0,
+            total=total,
+            verified=0,
+            search_errors=search_errors,
+            truncated=search_limited or total > 0,
+        )
     verifier = _RollingVerifier(candidates, options, limit)
     ranked, errors, verified = verifier.run()
     # Score desc, then recency desc: the freshest candidate wins ties.
@@ -652,4 +682,11 @@ def discover(options=None):
         total=total,
         verified=verified,
         search_errors=search_errors,
+        truncated=(
+            search_limited
+            or verifier.stopped_early
+            or verified < total
+            or len(ranked) > limit
+            or errors > 0
+        ),
     )

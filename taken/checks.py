@@ -467,6 +467,14 @@ def _require_dict(value, endpoint):
     return value
 
 
+class SearchResults(list):
+    """Search rows retaining GitHub's partial-result signal."""
+
+    def __init__(self, items=(), *, truncated=False):
+        super().__init__(items)
+        self.truncated = truncated
+
+
 def search_issues(query, per_page=50):
     """Search issues via the GitHub search API.
 
@@ -483,7 +491,11 @@ def search_issues(query, per_page=50):
     items = data.get("items")
     if not isinstance(items, list):
         raise TakenError("search/issues returned an unexpected response")
-    return items
+    total = data.get("total_count")
+    if not isinstance(total, int) or isinstance(total, bool):
+        total = None
+    limited = bool(data.get("incomplete_results")) or (total is not None and total > len(items))
+    return SearchResults(items, truncated=limited or (total is None and len(items) >= per_page))
 
 
 def _require_list(value, endpoint):
@@ -1724,6 +1736,27 @@ def check_ai_policy(owner, repo):
     return {"verdict": "none-found", "snippet": "", "source": None}
 
 
+class IssueListing(list):
+    """Issue rows plus the extent of the listing actually examined."""
+
+    def __init__(self, items=(), *, considered=0, truncated=False):
+        super().__init__(items)
+        self.considered = considered
+        self.truncated = truncated
+
+
+def result_metadata(results):
+    """Describe this result set without claiming a count of unseen candidates."""
+    metadata = {
+        "truncated": getattr(results, "truncated", False),
+        "considered": getattr(results, "considered", getattr(results, "total", len(results))),
+        "returned": len(results),
+    }
+    if hasattr(results, "verified"):
+        metadata["verified"] = results.verified
+    return metadata
+
+
 def list_open_issues(owner, repo, limit=20, label=None):
     """List open issues (not PRs) for a repo, most recently updated first.
 
@@ -1738,22 +1771,25 @@ def list_open_issues(owner, repo, limit=20, label=None):
     if label:
         params["labels"] = label
     found = []
+    considered = 0
+    truncated = limit <= 0
     page = 1
     while len(found) < limit:
         params["page"] = str(page)
         items = _require_list(gh_api(endpoint, params), endpoint)
         if not items:
             break
-        for item in items:
-            if "pull_request" in item:
-                continue
-            found.append(item)
-            if len(found) >= limit:
-                break
+        issues = [item for item in items if "pull_request" not in item]
+        considered += len(issues)
+        remaining = limit - len(found)
+        found.extend(issues[:remaining])
+        # A full page cannot establish that the listing is exhausted. Do not
+        # spend another request merely to disprove a possible truncation.
+        truncated = len(issues) > remaining or (len(found) >= limit and len(items) == 100)
         if len(items) < 100:
             break
         page += 1
-    return found
+    return IssueListing(found, considered=considered, truncated=truncated)
 
 
 def _commit_author_key(commit):

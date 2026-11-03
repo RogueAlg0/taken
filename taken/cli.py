@@ -602,20 +602,23 @@ def _print_discover_results(results, args):
         budget = checks.budget_report()
         print(
             json.dumps(
-                [
-                    {
-                        "target": r["target"],
-                        "score": r["score"],
-                        "why": r["why"],
-                        "verdict": r["verdict"],
-                        "reasons": r["reasons"],
-                        "findings": r["findings"],
-                        "friendly_labels": r["friendly_labels"],
-                        "welcoming": r["welcoming"],
-                        "budget": budget,
-                    }
-                    for r in results
-                ],
+                {
+                    "results": [
+                        {
+                            "target": r["target"],
+                            "score": r["score"],
+                            "why": r["why"],
+                            "verdict": r["verdict"],
+                            "reasons": r["reasons"],
+                            "findings": r["findings"],
+                            "friendly_labels": r["friendly_labels"],
+                            "welcoming": r["welcoming"],
+                            "budget": budget,
+                        }
+                        for r in results
+                    ],
+                    **checks.result_metadata(results),
+                },
                 indent=2,
             )
         )
@@ -641,6 +644,8 @@ def run_discover(args):
     if bar is not None:
         bar.close()
     if not results:
+        if args.json:
+            _print_discover_results(results, args)
         return _report_no_candidates(results)
     _print_discover_results(results, args)
     return 0
@@ -800,7 +805,7 @@ def format_batch_line(target, verdict, reasons):
     return f"{verdict:7} {target}  {first}"
 
 
-def _expand_repo_target(text, owner, repo, args, jobs):
+def _expand_repo_target(text, owner, repo, args, jobs, scans=None):
     """List a repo's open issues into jobs. Returns True when it failed."""
     try:
         issues = checks.list_open_issues(
@@ -811,6 +816,8 @@ def _expand_repo_target(text, owner, repo, args, jobs):
         return True
     if not issues:
         print(f"note: {text}: no open issues found", file=sys.stderr)
+    if scans is not None:
+        scans.append({"target": f"{owner}/{repo}", **checks.result_metadata(issues)})
     for item in issues:
         number = item["number"]
         # The listing already fetched this issue: pass it as
@@ -819,7 +826,7 @@ def _expand_repo_target(text, owner, repo, args, jobs):
     return False
 
 
-def _collect_batch_jobs(targets, args):
+def _collect_batch_jobs(targets, args, scans=None):
     """Parse targets into check jobs.
 
     Returns (jobs, failed, scanned_repo). Target parsing and repo issue
@@ -839,7 +846,7 @@ def _collect_batch_jobs(targets, args):
         if parsed[0] == "repo":
             scanned_repo = True
             _, owner, repo, _number = parsed
-            if _expand_repo_target(text, owner, repo, args, jobs):
+            if _expand_repo_target(text, owner, repo, args, jobs, scans=scans):
                 failed = True
         else:
             _, owner, repo, number = parsed
@@ -896,24 +903,21 @@ def _print_go_summary(results):
         print("no GO candidates in this scan.")
 
 
-def _print_batch_results(results, args, scanned_repo):
+def _print_batch_results(results, args, scanned_repo, metadata=None):
     if args.json:
         budget_info = checks.budget_report()
-        print(
-            json.dumps(
-                [
-                    {
-                        "target": target,
-                        "verdict": verdict,
-                        "reasons": reasons,
-                        "findings": findings,
-                        "budget": budget_info,
-                    }
-                    for target, verdict, reasons, findings in results
-                ],
-                indent=2,
-            )
-        )
+        rows = [
+            {
+                "target": target,
+                "verdict": verdict,
+                "reasons": reasons,
+                "findings": findings,
+                "budget": budget_info,
+            }
+            for target, verdict, reasons, findings in results
+        ]
+        output = {"results": rows, **metadata} if metadata is not None else rows
+        print(json.dumps(output, indent=2))
     else:
         for target, verdict, reasons, _findings in results:
             print(format_batch_line(target, verdict, reasons))
@@ -937,13 +941,22 @@ def run_batch(targets, args):
     ThreadPoolExecutor pattern. Results are collected in input order,
     so output is identical to the sequential run.
     """
-    jobs, failed, scanned_repo = _collect_batch_jobs(targets, args)
+    scans = []
+    jobs, failed, scanned_repo = _collect_batch_jobs(targets, args, scans=scans)
     results = []
     if jobs:
         batch_results, batch_failed = _run_batch_jobs(jobs, args, graphql.fetch_mode(args))
         results.extend(batch_results)
         failed = failed or batch_failed
-    _print_batch_results(results, args, scanned_repo)
+    metadata = None
+    if scanned_repo:
+        metadata = {
+            "truncated": any(scan["truncated"] for scan in scans) or failed,
+            "considered": len(jobs),
+            "returned": len(results),
+            "scans": scans,
+        }
+    _print_batch_results(results, args, scanned_repo, metadata=metadata)
     return 3 if failed else 0
 
 

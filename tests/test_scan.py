@@ -149,4 +149,7 @@ def test_scan_json(monkeypatch, capsys):
     monkeypatch.setattr(checks, "gh_api", make_fake({1: "go"}, [1]))
     assert main(["--json", "octo/repo"]) == 0
     data = json.loads(capsys.readouterr().out)
+    assert data["truncated"] is False
+    assert data["returned"] == 1
+    data = data["results"]
     assert [(r["target"], r["verdict"]) for r in data] == [("octo/repo#1", "GO")]

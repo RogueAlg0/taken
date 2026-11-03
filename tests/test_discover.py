@@ -110,6 +110,8 @@ def test_discover_min_contributors_filters_everything(faked, capsys):
 def test_discover_json(faked, capsys):
     assert main(["--discover", "--label", "good first issue", "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
+    assert data["returned"] == 2
+    data = data["results"]
     assert [(r["target"], r["score"]) for r in data] == [
         ("octo/repo#1", 6),
         ("octo/repo#3", 1),
@@ -148,6 +150,8 @@ def test_discover_json_carries_friendly_and_welcoming(monkeypatch, capsys):
     monkeypatch.setattr(checks, "gh_api", fake)
     assert main(["--discover", "--label", "good first issue", "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
+    assert data["returned"] == 1
+    data = data["results"]
     assert data[0]["friendly_labels"] == ["Help Wanted"]
     assert data[0]["welcoming"] == ["has CONTRIBUTING.md"]
 
