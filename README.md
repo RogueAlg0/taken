@@ -166,6 +166,12 @@ Three tools: `check_issue`, `scan_repo`, `discover_candidates`. Published in
 the official [MCP Registry](https://registry.modelcontextprotocol.io) as
 `io.github.RogueAlg0/taken`.
 
+Clients that request MCP progress receive updates while `scan_repo` checks
+issues and `discover_candidates` verifies candidates. The updates use the
+current request's progress channel; clients that do not request progress
+keep the same results. Discovery can finish before its total is reached
+when the best results are already decided.
+
 ## Development
 
     uv sync          # install dev tools (ruff, pytest)
