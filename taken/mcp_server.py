@@ -21,6 +21,14 @@ import sys
 from typing import Annotated
 
 try:
+    from mcp.server.mcpserver import Context
+except ImportError:  # Keep broken-install guidance available, like Field below.
+
+    class Context:  # type: ignore[no-redef]
+        pass
+
+
+try:
     from pydantic import Field
 except ImportError:  # pydantic ships with the `mcp` dependency
     # S1542 false positive: mirrors pydantic's public Field name, so
@@ -41,6 +49,25 @@ TakenError failures -> `unknown`."""
 def _expand_error_payload_docs(function):
     function.__doc__ = function.__doc__.replace("__ERROR_PAYLOAD_DOCS__", _ERROR_PAYLOAD_DOCS)
     return function
+
+
+def _progress_callback(ctx):
+    if ctx is None:
+        return None
+    try:
+        _ = ctx.request_context
+    except ValueError:
+        # Direct SDK calls outside a request have no notification channel.
+        return None
+
+    def report(done, total):
+        from anyio.from_thread import run
+
+        # MCP runs synchronous tools in an AnyIO worker thread. Send on the
+        # request's event loop before continuing with the next unit of work.
+        run(ctx.report_progress, done, total)
+
+    return report
 
 
 def _check_one(
@@ -264,6 +291,8 @@ def scan_repo(
             "complex issue. Default: 14.",
         ),
     ] = None,
+    *,
+    ctx: Context | None = None,
 ) -> dict:
     """Scan a repository's open issues and recommend the GO ones.
 
@@ -305,6 +334,9 @@ def scan_repo(
     mode = graphql.fetch_mode()
     workers = budget.current().batch_workers
     results = []
+    on_progress = _progress_callback(ctx)
+    if on_progress is not None:
+        on_progress(0, len(issues))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [
             pool.submit(
@@ -319,7 +351,7 @@ def scan_repo(
             )
             for item in issues
         ]
-        for item, future in zip(issues, futures, strict=True):
+        for completed, (item, future) in enumerate(zip(issues, futures, strict=True), 1):
             number = item["number"]
             try:
                 # The listing already fetched this issue: pass it as payload
@@ -328,6 +360,9 @@ def scan_repo(
             except (checks.TakenError, subprocess.TimeoutExpired) as exc:
                 results.append({"target": f"{owner}/{repo}#{number}", **_error_payload(exc)})
                 continue
+            finally:
+                if on_progress is not None:
+                    on_progress(completed, len(issues))
             # The _check_one payload already carries the markers; reuse
             # them instead of recomputing (issue #46).
             results.append(
@@ -411,6 +446,8 @@ def discover_candidates(
             "complex issue. Default: 14.",
         ),
     ] = None,
+    *,
+    ctx: Context | None = None,
 ) -> dict:
     """Discover top open-source contribution candidates.
 
@@ -450,7 +487,7 @@ def discover_candidates(
             min_contributors=min_contributors,
             me=me,
             jobs=discover.DEFAULT_JOBS,
-            on_progress=None,
+            on_progress=_progress_callback(ctx),
             # Automatic from auth state (GraphQL when logged in), like the CLI.
             mode=graphql.fetch_mode(),
             thresholds=thresholds,
