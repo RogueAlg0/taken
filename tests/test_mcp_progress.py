@@ -1,6 +1,8 @@
 """MCP callers see progress while the synchronous tools are still running."""
 
 import asyncio
+import json
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -116,3 +118,43 @@ def test_sdk_call_outside_request_keeps_progress_optional(monkeypatch):
     monkeypatch.setattr(discover, "discover", fake_discover)
     result = asyncio.run(mcp_server.mcp.call_tool("discover_candidates", {}))
     assert not result.is_error
+
+
+def test_scan_reports_fast_completion_without_reordering_results(monkeypatch):
+    events = []
+    release = threading.Event()
+    mcp_server.budget.activate("test-user")
+
+    async def progress(done, total, message=None):
+        events.append((done, total))
+        if done == 1:
+            release.set()
+
+    def check(owner, repo, number, **kwargs):
+        if number == 1:
+            assert release.wait(2), "fast second issue must report before the first finishes"
+        return dict(
+            target=f"{owner}/{repo}#{number}",
+            verdict="GO",
+            reasons=[],
+            friendly_labels=[],
+            welcoming=[],
+        )
+
+    monkeypatch.setattr(checks, "list_open_issues", lambda *a, **kw: [{"number": 1}, {"number": 2}])
+    monkeypatch.setattr(mcp_server.graphql, "fetch_mode", lambda: "rest")
+    monkeypatch.setattr(mcp_server, "_check_one", check)
+
+    async def run():
+        result = await mcp_server.mcp.call_tool(
+            "scan_repo", {"owner": "o", "repo": "r"}, context=context_for(progress)
+        )
+        assert not result.is_error
+        rows = json.loads(result.content[0].text)["results"]
+        assert [row["target"] for row in rows] == ["o/r#1", "o/r#2"]
+
+    try:
+        asyncio.run(run())
+    finally:
+        release.set()
+    assert events == [(0, 2), (1, 2), (2, 2)]

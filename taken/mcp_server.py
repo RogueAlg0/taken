@@ -328,12 +328,12 @@ def scan_repo(
         }
     # The per-issue checks run through a worker pool sized by the budget
     # tier, reusing discover's ThreadPoolExecutor pattern. Futures are
-    # consumed in input order, so the stable verdict-rank sort below
-    # yields exactly the sequential output. The fetch mode is resolved
+    # reported in completion order; their rows are reassembled in input order
+    # before the stable verdict-rank sort. The fetch mode is resolved
     # once up front so the identity probe never fires concurrently.
     mode = graphql.fetch_mode()
     workers = budget.current().batch_workers
-    results = []
+    by_index = {}
     on_progress = _progress_callback(ctx)
     if on_progress is not None:
         on_progress(0, len(issues))
@@ -351,29 +351,33 @@ def scan_repo(
             )
             for item in issues
         ]
-        for completed, (item, future) in enumerate(zip(issues, futures, strict=True), 1):
+        future_items = {
+            future: (index, item)
+            for index, (item, future) in enumerate(zip(issues, futures, strict=True))
+        }
+        for completed, future in enumerate(concurrent.futures.as_completed(future_items), 1):
+            index, item = future_items[future]
             number = item["number"]
             try:
                 # The listing already fetched this issue: pass it as payload
                 # so the per-issue refetch is skipped (issue #211).
                 payload = future.result()
             except (checks.TakenError, subprocess.TimeoutExpired) as exc:
-                results.append({"target": f"{owner}/{repo}#{number}", **_error_payload(exc)})
+                by_index[index] = {"target": f"{owner}/{repo}#{number}", **_error_payload(exc)}
                 continue
             finally:
                 if on_progress is not None:
                     on_progress(completed, len(issues))
             # The _check_one payload already carries the markers; reuse
             # them instead of recomputing (issue #46).
-            results.append(
-                {
-                    "target": payload["target"],
-                    "verdict": payload["verdict"],
-                    "reasons": payload["reasons"],
-                    "friendly_labels": payload["friendly_labels"],
-                    "welcoming": payload["welcoming"],
-                }
-            )
+            by_index[index] = {
+                "target": payload["target"],
+                "verdict": payload["verdict"],
+                "reasons": payload["reasons"],
+                "friendly_labels": payload["friendly_labels"],
+                "welcoming": payload["welcoming"],
+            }
+    results = [by_index[index] for index in range(len(issues))]
     results.sort(key=lambda r: _VERDICT_RANK.get(str(r.get("verdict") or ""), 3))
     summary = {GO: 0, CAUTION: 0, TAKEN: 0, "errors": 0}
     for item in results:
