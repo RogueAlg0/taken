@@ -542,8 +542,13 @@ def _update_progress_bar(bar, done, total):
     bar.refresh()
 
 
+def _searched_count(count, total):
+    # count is the page that was read; total is what the search API reports.
+    return f"{count}" if total is None else f"{count} of {total}"
+
+
 def _log_searched(searched):
-    detail = ", ".join(f"{lab} ({count})" for lab, count in searched)
+    detail = ", ".join(f"{lab} ({_searched_count(count, total)})" for lab, count, total in searched)
     print(f"searched: {detail}", file=sys.stderr)
 
 

@@ -179,8 +179,9 @@ def test_discover_uses_single_ord_label_search(monkeypatch, capsys):
         if endpoint == "search/issues":
             q = (params or {}).get("q", "")
             search_calls.append(q)
+            # The API reports every match, not just the page it returned.
             return {
-                "total_count": len(items),
+                "total_count": 1234,
                 "incomplete_results": False,
                 "items": items,
             }
@@ -198,12 +199,37 @@ def test_discover_uses_single_ord_label_search(monkeypatch, capsys):
         assert f'"{lab}"' in search_calls[0]
     assert len(targets) <= discover.VERIFY_POOL
     assert "octo/repo#1" in targets
-    assert searched == [[(", ".join(discover.SEARCH_LABELS), 5)]]
+    assert searched == [[(", ".join(discover.SEARCH_LABELS), 5, 1234)]]
 
-    # The CLI reports the combined search on stderr.
+    # The CLI reports the combined search on stderr, page length and total.
     assert main(["--discover"]) == 0
     err = capsys.readouterr().err
-    assert "searched: good first issue, good-first-issue, beginner friendly, help wanted (5)" in err
+    assert (
+        "searched: good first issue, good-first-issue, beginner friendly, help wanted (5 of 1234)"
+        in err
+    )
+
+
+def test_searched_total_unknown_when_response_has_none(monkeypatch, capsys):
+    items = [search_item(n, 1) for n in range(1, 4)]
+    base = make_fake([], {}, {})
+
+    def fake(endpoint, params=None):
+        if endpoint == "search/issues":
+            return {"incomplete_results": False, "items": items}
+        return base(endpoint, params)
+
+    monkeypatch.setattr(checks, "gh_api", fake)
+    searched = []
+    discover.discover(discover.DiscoverOptions(jobs=1, limit=50, on_searched=searched.append))
+    assert searched == [[(", ".join(discover.SEARCH_LABELS), 3, None)]]
+
+    # Without a total the CLI prints the page length alone.
+    assert main(["--discover"]) == 0
+    err = capsys.readouterr().err
+    assert (
+        "searched: good first issue, good-first-issue, beginner friendly, help wanted (3)\n" in err
+    )
 
 
 def test_discover_with_targets_is_error(capsys):
@@ -244,6 +270,7 @@ def test_discover_rejects_a_quoted_label_before_any_search(monkeypatch, capsys):
         raise AssertionError("a bad label must be rejected before any API call")
 
     monkeypatch.setattr(checks, "search_issues", no_api_calls)
+    monkeypatch.setattr(checks, "search_issues_page", no_api_calls)
     monkeypatch.setattr(discover, "discover", no_api_calls)
     with pytest.raises(SystemExit) as exc:
         main(["--discover", "--label", 'help" OR repo:x'])
@@ -507,9 +534,11 @@ def test_discover_fallback_keeps_partial_candidates(monkeypatch, capsys):
     assert results.search_errors == [("good first issue", "boom")]
     # ... and on_searched carries one entry per label that succeeded.
     assert len(searched) == 1
-    assert sorted(lab for lab, _ in searched[0]) == sorted(
+    assert sorted(lab for lab, _, _ in searched[0]) == sorted(
         lab for lab in discover.SEARCH_LABELS if lab != "good first issue"
     )
+    # Each entry carries that label's page length and total_count.
+    assert all(count == len(items) and total == len(items) for _, count, total in searched[0])
 
 
 def test_discover_fallback_reports_partial_results_on_cli(monkeypatch, capsys):

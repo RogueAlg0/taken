@@ -115,7 +115,9 @@ def test_discover_reports_search_and_verification_limits(
         for n in range(count)
     ]
     monkeypatch.setattr(
-        checks, "search_issues", lambda *a, **kw: checks.SearchResults(items, truncated=partial)
+        checks,
+        "search_issues_page",
+        lambda *a, **kw: (checks.SearchResults(items, truncated=partial), len(items)),
     )
     monkeypatch.setattr(discover, "_verify_candidate", lambda o, r, n, *a, **kw: (entry(n), None))
     result = discover.discover(discover.DiscoverOptions(limit=limit, jobs=2))
@@ -188,9 +190,36 @@ def test_discovery_full_page_uses_upstream_completeness(monkeypatch, known_compl
         for n in range(discover.SEARCH_PER_PAGE)
     ]
     rows = checks.SearchResults(items, truncated=False) if known_complete else items
-    monkeypatch.setattr(checks, "search_issues", lambda *a, **kw: rows)
+    monkeypatch.setattr(checks, "search_issues_page", lambda *a, **kw: (rows, None))
     monkeypatch.setattr(discover, "_verify_pool_size", lambda: discover.SEARCH_PER_PAGE)
     monkeypatch.setattr(discover, "_verify_candidate", lambda o, r, n, *a, **kw: (entry(n), None))
     result = discover.discover(discover.DiscoverOptions(limit=100, jobs=2))
     assert result.truncated is (not known_complete)
     assert len(result) == discover.SEARCH_PER_PAGE
+
+
+@pytest.mark.parametrize(
+    "incomplete,total,expected", [(True, 2, True), (False, 47, True), (False, 2, False)]
+)
+def test_discovery_preserves_search_totals_and_completeness(
+    monkeypatch, incomplete, total, expected
+):
+    items = [
+        dict(
+            number=n,
+            repository_url="https://api.github.com/repos/o/r",
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+        for n in range(2)
+    ]
+    monkeypatch.setattr(
+        checks,
+        "gh_api",
+        lambda *a, **kw: dict(items=items, total_count=total, incomplete_results=incomplete),
+    )
+    monkeypatch.setattr(discover, "_verify_candidate", lambda o, r, n, *a, **kw: (entry(n), None))
+    searched = []
+    result = discover.discover(discover.DiscoverOptions(limit=10, on_searched=searched.append))
+    assert result.truncated is expected
+    assert len(result) == 2
+    assert searched == [[(", ".join(discover.SEARCH_LABELS), 2, total)]]
