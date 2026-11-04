@@ -172,6 +172,29 @@ current request's progress channel; clients that do not request progress
 keep the same results. Discovery can finish before its total is reached
 when the best results are already decided.
 
+## Result completeness for machine callers
+
+MCP `scan_repo` and `discover_candidates` responses include `truncated`,
+`considered` and `returned`, even for empty results. Discovery also reports
+`verified`, the number of candidates submitted for verification. `truncated`
+means results may be incomplete because a listing/search/pool cap was reached,
+ranking stopped early, the result limit excluded matches, or discovery had
+verification/search errors. A full API page is conservatively marked limited
+when exhaustion cannot be established without another request.
+
+Counts describe observed work, not the total number of issues on GitHub.
+For MCP scans, `considered` counts issues in fetched listing pages (excluding
+PRs); for discovery it counts candidates admitted to the verification pool.
+`returned` counts rows in `results`.
+
+**CLI JSON migration:** `--discover --json` and bare-repository scans with
+`--json` now return an object containing `results` and this metadata. Consumers
+of the former array should read `payload["results"]`. Repository batches also
+include `scans`, with per-repository listing counts and limits; their top-level
+`considered` counts check jobs. Batches containing only explicit issue targets
+keep their JSON array format. Human-readable output is unchanged. Discovery
+emits its JSON object even when no candidate is returned.
+
 ## Development
 
     uv sync          # install dev tools (ruff, pytest)

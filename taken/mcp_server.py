@@ -390,6 +390,7 @@ def scan_repo(
         "target": f"{owner}/{repo}",
         "effective_parameters": effective_parameters,
         "results": results,
+        **{**checks.result_metadata(issues), "returned": len(results)},
         "recommendations": [r["target"] for r in results if r.get("verdict") == GO],
         "summary": summary,
         "budget": checks.budget_report(),
@@ -501,6 +502,7 @@ def discover_candidates(
         return {"effective_parameters": effective_parameters, **_error_payload(exc)}
     return {
         "effective_parameters": effective_parameters,
+        **checks.result_metadata(results),
         "search_errors": [
             {"label": label, **_error_payload(checks.TakenError(error))}
             for label, error in getattr(results, "search_errors", [])
