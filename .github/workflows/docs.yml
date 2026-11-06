@@ -36,9 +36,13 @@ jobs:
         with:
           path: site
   deploy:
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
     needs: docs
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
