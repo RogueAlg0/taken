@@ -154,6 +154,38 @@ def test_missing_gh_binary_is_exit_3(monkeypatch):
     assert main(["octo/repo#1"]) == 3
 
 
+def gh_times_out(cmd, **kwargs):
+    raise checks.subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+
+
+def gh_prints_html(cmd, **kwargs):
+    return checks.subprocess.CompletedProcess(cmd, 0, stdout="<html>busy</html>", stderr="")
+
+
+GH_FAILURES = [
+    (gh_times_out, f"timed out after {checks.API_TIMEOUT}s"),
+    (gh_prints_html, "did not return JSON"),
+]
+
+
+@pytest.mark.parametrize(("fake_run", "message"), GH_FAILURES)
+def test_gh_subprocess_failure_raises(monkeypatch, fake_run, message):
+    monkeypatch.delenv("TAKEN_TRANSPORT", raising=False)
+    monkeypatch.setattr(checks.subprocess, "run", fake_run)
+    with pytest.raises(checks.TakenError, match=message):
+        checks.gh_api("repos/octo/repo/issues/1")
+
+
+@pytest.mark.parametrize(("fake_run", "message"), GH_FAILURES)
+def test_gh_subprocess_failure_is_exit_3(monkeypatch, capsys, fake_run, message):
+    monkeypatch.delenv("TAKEN_TRANSPORT", raising=False)
+    monkeypatch.setattr(checks.subprocess, "run", fake_run)
+    assert main(["octo/repo#1"]) == 3
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert message in err
+
+
 @pytest.mark.parametrize("identity", [None, "someone"])
 @pytest.mark.parametrize("response", [None, [], "unexpected", 42])
 def test_non_object_linked_pr_response_raises(monkeypatch, identity, response):
@@ -174,3 +206,51 @@ def test_non_object_linked_pr_response_raises(monkeypatch, identity, response):
     budget.activate(identity=identity)
     with pytest.raises(checks.TakenError, match=f"gh api {endpoint}"):
         checks.check_timeline("octo", "repo", 1)
+
+
+def cross_reference(url):
+    return {"event": "cross-referenced", "source": {"issue": {"html_url": url}}}
+
+
+def test_timeline_skips_issue_links_and_repeated_prs(monkeypatch):
+    calls = []
+
+    def fake(path, params=None):
+        calls.append(path)
+        if path == "repos/octo/repo/issues/1/timeline":
+            return [
+                cross_reference("https://github.com/octo/repo/issues/2"),
+                cross_reference("https://github.com/octo/repo/pull/3"),
+                cross_reference("https://github.com/octo/repo/pull/3"),
+            ]
+        return {"state": "closed", "title": "x", "user": {"login": "someone"}}
+
+    monkeypatch.setattr(checks, "gh_api", fake)
+    linked, truncated = checks.check_timeline("octo", "repo", 1)
+
+    assert [pr["number"] for pr in linked] == [3]
+    assert calls == ["repos/octo/repo/issues/1/timeline", "repos/octo/repo/pulls/3"]
+    assert truncated is False
+
+
+def test_timeline_event_leaves_seen_alone_when_skipped():
+    seen = {("octo", "repo", "3")}
+    issue_link = cross_reference("https://github.com/octo/repo/issues/2")
+    repeated_pr = cross_reference("https://github.com/octo/repo/pull/3")
+
+    assert checks._timeline_event_pr(issue_link, seen) is None
+    assert checks._timeline_event_pr(repeated_pr, seen) is None
+    assert seen == {("octo", "repo", "3")}
+
+
+def test_latest_activity_ignores_comments_without_an_author():
+    comments = [
+        {"user": None, "created_at": "2026-10-03T00:00:00Z"},
+        {"user": {"login": ""}, "created_at": "2026-10-03T00:00:00Z"},
+        {"user": {}, "created_at": "2026-10-03T00:00:00Z"},
+        {"user": {"login": "Alice"}, "created_at": "2026-10-01T00:00:00Z"},
+    ]
+    latest = checks._latest_activity_by_author(comments)
+
+    assert list(latest) == ["alice"]
+    assert latest["alice"][1] == "Alice"
