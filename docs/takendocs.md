@@ -54,8 +54,10 @@ options:
                         beginner labels, untriaged issues); read-only, no
                         verdicts
   --claim-wait-days N   health: a claim with no maintainer reply counts as
-                        waiting after N days; a claim gone quiet after a
-                        maintainer reply counts after N days (default: 7)
+                        waiting once it reaches N days old (a claim exactly N
+                        days old already counts); a claim gone quiet after a
+                        maintainer reply counts once it reaches N days
+                        (default: 7)
   --pr-stale-days N     health: an open PR counts as stale after N days
                         without activity (default: 14)
   --gfi-stale-days N    health: a good first issue or hacktoberfest label
