@@ -181,8 +181,9 @@ def build_parser():
         type=_non_negative_int,
         default=health.DEFAULT_CLAIM_WAIT_DAYS,
         metavar="N",
-        help="health: a claim with no maintainer reply counts as waiting after N days; "
-        "a claim gone quiet after a maintainer reply counts after N days "
+        help="health: a claim with no maintainer reply counts as waiting once it "
+        "reaches N days old (a claim exactly N days old already counts); "
+        "a claim gone quiet after a maintainer reply counts once it reaches N days "
         f"(default: {health.DEFAULT_CLAIM_WAIT_DAYS})",
     )
     parser.add_argument(

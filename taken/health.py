@@ -221,11 +221,14 @@ def _quiet_entry(number, title, url, claimant, key, events, reply, now, wait_day
 def _scan_issue_claims(item, events, options, me, now):
     """(waiting, quiet) claim entries for one open issue.
 
-    A claim with no maintainer reply older than claim_wait_days is
-    waiting on the maintainer. A claim where a maintainer replied and the
-    claimant has said nothing since (for at least claim_wait_days) has
-    gone quiet the other way. A maintainer claiming an issue is
-    assignment, not a plea awaiting a reply, so those are skipped.
+    A claim with no maintainer reply for at least claim_wait_days is
+    waiting on the maintainer: a claim exactly claim_wait_days old
+    already counts (see `_waiting_entry`, which only excludes claims
+    with `age_days < claim_wait_days`). A claim where a maintainer
+    replied and the claimant has said nothing since (for at least
+    claim_wait_days) has gone quiet the other way. A maintainer claiming
+    an issue is assignment, not a plea awaiting a reply, so those are
+    skipped.
     """
     waiting, quiet = [], []
     number = item["number"]
