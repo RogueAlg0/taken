@@ -70,7 +70,8 @@ options:
                         and sizes: never tokens or response bodies.
   --me LOGIN            your GitHub login; your own comments are ignored in
                         the claimant scan.
-  --no-cache            bypass the API response cache (~/.cache/taken, 1h TTL).
+  --no-cache            bypass the API response cache (~/.cache/taken, 1h
+                        TTL).
   --clear-cache         delete the API response cache (~/.cache/taken) and
                         exit.
   --graphql             force the GraphQL fetch path even when not logged in
