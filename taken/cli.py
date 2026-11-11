@@ -97,13 +97,13 @@ def build_parser():
     parser.add_argument(
         "targets",
         nargs="*",
-        help="owner/repo#123 or GitHub issue URLs (one or more)",
+        help="owner/repo#123 or GitHub issue URLs (one or more).",
     )
     parser.add_argument(
         "--file",
         metavar="PATH",
         default=None,
-        help="read targets from a file, one per line (blank lines and # comments ignored)",
+        help="read targets from a file, one per line (blank lines and # comments ignored).",
     )
     parser.add_argument(
         "--limit",
@@ -113,32 +113,32 @@ def build_parser():
         help=(
             "max open issues to check per scan target, max candidates to return "
             "in --discover mode, or max issues listed in --health mode "
-            "(default: 20; 100 in --health mode)"
+            "(default: 20; 100 in --health mode)."
         ),
     )
     parser.add_argument(
         "--label",
         metavar="LABEL",
         default=None,
-        help="scan mode: only consider open issues carrying this label",
+        help="scan mode: only consider open issues carrying this label.",
     )
     parser.add_argument(
         "--discover",
         action="store_true",
-        help="discover top candidates via GitHub issue search, verified and ranked",
+        help="discover top candidates via GitHub issue search, verified and ranked.",
     )
     parser.add_argument(
         "--language",
         metavar="LANG",
         default=None,
-        help="discover: only consider repos in this language",
+        help="discover: only consider repos in this language.",
     )
     parser.add_argument(
         "--min-contributors",
         type=_non_negative_int,
         default=0,
         metavar="N",
-        help="discover: only consider repos with at least N contributors in the last 90 days",
+        help="discover: only consider repos with at least N contributors in the last 90 days.",
     )
     parser.add_argument(
         "--jobs",
@@ -146,12 +146,12 @@ def build_parser():
         default=discover.DEFAULT_JOBS,
         metavar="N",
         help="discover: verify candidates with N parallel workers "
-        f"(default: {discover.DEFAULT_JOBS})",
+        f"(default: {discover.DEFAULT_JOBS}).",
     )
     parser.add_argument(
         "--no-progress",
         action="store_true",
-        help="discover: hide the progress bar",
+        help="discover: hide the progress bar.",
     )
     parser.add_argument(
         "--allocation",
@@ -159,7 +159,7 @@ def build_parser():
         default="bandit",
         help="discover: how verify budget is split across repos: 'bandit' "
         "spends it by Thompson sampling on each repo's observed GO yield "
-        "(default), 'recency' verifies freshest first",
+        "(default), 'recency' verifies freshest first.",
     )
     parser.add_argument(
         "--explore-floor",
@@ -167,14 +167,14 @@ def build_parser():
         default=0.15,
         metavar="P",
         help="discover: probability a bandit pick explores uniformly "
-        "instead of following sampled yields (default: 0.15)",
+        "instead of following sampled yields (default: 0.15).",
     )
     parser.add_argument(
         "--health",
         action="store_true",
         help="report maintainer-facing repo health for one owner/repo target "
         "(claims waiting, stale PRs, stale beginner labels, untriaged issues); "
-        "read-only, no verdicts",
+        "read-only, no verdicts.",
     )
     parser.add_argument(
         "--claim-wait-days",
@@ -183,7 +183,7 @@ def build_parser():
         metavar="N",
         help="health: a claim with no maintainer reply counts as waiting after N days; "
         "a claim gone quiet after a maintainer reply counts after N days "
-        f"(default: {health.DEFAULT_CLAIM_WAIT_DAYS})",
+        f"(default: {health.DEFAULT_CLAIM_WAIT_DAYS}).",
     )
     parser.add_argument(
         "--pr-stale-days",
@@ -191,7 +191,7 @@ def build_parser():
         default=health.DEFAULT_PR_STALE_DAYS,
         metavar="N",
         help="health: an open PR counts as stale after N days without activity "
-        f"(default: {health.DEFAULT_PR_STALE_DAYS})",
+        f"(default: {health.DEFAULT_PR_STALE_DAYS}).",
     )
     parser.add_argument(
         "--gfi-stale-days",
@@ -199,14 +199,14 @@ def build_parser():
         default=health.DEFAULT_GFI_STALE_DAYS,
         metavar="N",
         help="health: a good first issue or hacktoberfest label counts as stale "
-        f"after N days untouched (default: {health.DEFAULT_GFI_STALE_DAYS})",
+        f"after N days untouched (default: {health.DEFAULT_GFI_STALE_DAYS}).",
     )
-    parser.add_argument("--json", action="store_true", help="print the full findings as JSON")
+    parser.add_argument("--json", action="store_true", help="print the full findings as JSON.")
     parser.add_argument(
         "--verbose",
         action="store_true",
         help="print an API usage summary (calls per endpoint, cache hits/misses) "
-        "to stderr at the end of the run",
+        "to stderr at the end of the run.",
     )
     parser.add_argument(
         "--debug",
@@ -220,29 +220,29 @@ def build_parser():
         "--me",
         metavar="LOGIN",
         default=None,
-        help="your GitHub login; your own comments are ignored in the claimant scan",
+        help="your GitHub login; your own comments are ignored in the claimant scan.",
     )
     parser.add_argument(
         "--no-cache",
         action="store_true",
-        help="bypass the API response cache (~/.cache/taken, 1h TTL)",
+        help="bypass the API response cache (~/.cache/taken, 1h TTL).",
     )
     parser.add_argument(
         "--clear-cache",
         action="store_true",
-        help="delete the API response cache (~/.cache/taken) and exit",
+        help="delete the API response cache (~/.cache/taken) and exit.",
     )
     parser.add_argument(
         "--graphql",
         action="store_true",
         help="force the GraphQL fetch path even when not logged in to GitHub "
-        "(falls back to REST on failure); the default for logged-in users",
+        "(falls back to REST on failure); the default for logged-in users.",
     )
     parser.add_argument(
         "--rest",
         action="store_true",
         help="force the REST fetch path even when logged in to GitHub; "
-        "escape hatch for the GraphQL default (or TAKEN_REST=1)",
+        "escape hatch for the GraphQL default (or TAKEN_REST=1).",
     )
     parser.add_argument(
         "--persistent-session",
@@ -257,7 +257,7 @@ def build_parser():
         default=checks.DEFAULT_PR_IDLE_DAYS,
         metavar="N",
         help="stale-claim decay: an open linked PR with no activity for longer than N days "
-        f"weakens from TAKEN to CAUTION (default: {checks.DEFAULT_PR_IDLE_DAYS})",
+        f"weakens from TAKEN to CAUTION (default: {checks.DEFAULT_PR_IDLE_DAYS}).",
     )
     parser.add_argument(
         "--claim-silence-days",
@@ -266,7 +266,7 @@ def build_parser():
         metavar="N",
         help="stale-claim decay: days one claim blocks as CAUTION on a simple issue; "
         "the clock resets on any claimant activity "
-        f"(default: {checks.DEFAULT_CLAIM_SILENCE_DAYS})",
+        f"(default: {checks.DEFAULT_CLAIM_SILENCE_DAYS}).",
     )
     parser.add_argument(
         "--claim-silence-complex-days",
@@ -274,7 +274,7 @@ def build_parser():
         default=checks.DEFAULT_CLAIM_SILENCE_COMPLEX_DAYS,
         metavar="N",
         help="stale-claim decay: days one claim blocks as CAUTION on a complex issue "
-        f"(default: {checks.DEFAULT_CLAIM_SILENCE_COMPLEX_DAYS})",
+        f"(default: {checks.DEFAULT_CLAIM_SILENCE_COMPLEX_DAYS}).",
     )
     parser.add_argument("--version", action="version", version=f"taken {__version__}")
     return parser

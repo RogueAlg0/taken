@@ -22,77 +22,78 @@ usage: taken [-h] [--file PATH] [--limit N] [--label LABEL] [--discover]
 Check whether a GitHub issue is already taken before you volunteer for it.
 
 positional arguments:
-  targets               owner/repo#123 or GitHub issue URLs (one or more)
+  targets               owner/repo#123 or GitHub issue URLs (one or more).
 
 options:
   -h, --help            show this help message and exit
   --file PATH           read targets from a file, one per line (blank lines
-                        and # comments ignored)
+                        and # comments ignored).
   --limit N             max open issues to check per scan target, max
                         candidates to return in --discover mode, or max issues
                         listed in --health mode (default: 20; 100 in --health
-                        mode)
+                        mode).
   --label LABEL         scan mode: only consider open issues carrying this
-                        label
+                        label.
   --discover            discover top candidates via GitHub issue search,
-                        verified and ranked
-  --language LANG       discover: only consider repos in this language
+                        verified and ranked.
+  --language LANG       discover: only consider repos in this language.
   --min-contributors N  discover: only consider repos with at least N
-                        contributors in the last 90 days
+                        contributors in the last 90 days.
   --jobs N              discover: verify candidates with N parallel workers
-                        (default: 8)
-  --no-progress         discover: hide the progress bar
+                        (default: 8).
+  --no-progress         discover: hide the progress bar.
   --allocation {bandit,recency}
                         discover: how verify budget is split across repos:
                         'bandit' spends it by Thompson sampling on each repo's
                         observed GO yield (default), 'recency' verifies
-                        freshest first
+                        freshest first.
   --explore-floor P     discover: probability a bandit pick explores uniformly
-                        instead of following sampled yields (default: 0.15)
+                        instead of following sampled yields (default: 0.15).
   --health              report maintainer-facing repo health for one
                         owner/repo target (claims waiting, stale PRs, stale
                         beginner labels, untriaged issues); read-only, no
-                        verdicts
+                        verdicts.
   --claim-wait-days N   health: a claim with no maintainer reply counts as
                         waiting after N days; a claim gone quiet after a
-                        maintainer reply counts after N days (default: 7)
+                        maintainer reply counts after N days (default: 7).
   --pr-stale-days N     health: an open PR counts as stale after N days
-                        without activity (default: 14)
+                        without activity (default: 14).
   --gfi-stale-days N    health: a good first issue or hacktoberfest label
-                        counts as stale after N days untouched (default: 30)
-  --json                print the full findings as JSON
+                        counts as stale after N days untouched (default: 30).
+  --json                print the full findings as JSON.
   --verbose             print an API usage summary (calls per endpoint, cache
-                        hits/misses) to stderr at the end of the run
+                        hits/misses) to stderr at the end of the run.
   --debug               print a machine-readable JSON debug report (wall-clock
                         timings per phase, rate-limit state before/after,
                         retries, backoff time, API usage) to stderr at the end
                         of the run; implies --verbose. Only counts, timings,
                         and sizes: never tokens or response bodies.
   --me LOGIN            your GitHub login; your own comments are ignored in
-                        the claimant scan
-  --no-cache            bypass the API response cache (~/.cache/taken, 1h TTL)
+                        the claimant scan.
+  --no-cache            bypass the API response cache (~/.cache/taken, 1h
+                        TTL).
   --clear-cache         delete the API response cache (~/.cache/taken) and
-                        exit
+                        exit.
   --graphql             force the GraphQL fetch path even when not logged in
                         to GitHub (falls back to REST on failure); the default
-                        for logged-in users
+                        for logged-in users.
   --rest                force the REST fetch path even when logged in to
                         GitHub; escape hatch for the GraphQL default (or
-                        TAKEN_REST=1)
+                        TAKEN_REST=1).
   --persistent-session  GraphQL over one persistent HTTPS connection for the
                         process; token from `gh auth token` is held in memory
                         only. Opt-in (or TAKEN_PERSISTENT_SESSION=1); --rest
                         still wins.
   --pr-idle-days N      stale-claim decay: an open linked PR with no activity
                         for longer than N days weakens from TAKEN to CAUTION
-                        (default: 90)
+                        (default: 90).
   --claim-silence-days N
                         stale-claim decay: days one claim blocks as CAUTION on
                         a simple issue; the clock resets on any claimant
-                        activity (default: 7)
+                        activity (default: 7).
   --claim-silence-complex-days N
                         stale-claim decay: days one claim blocks as CAUTION on
-                        a complex issue (default: 14)
+                        a complex issue (default: 14).
   --version             show program's version number and exit
 ```
 
