@@ -38,6 +38,54 @@ def test_check_ai_policy_reports_ban(monkeypatch):
     assert result["snippet"]
 
 
+def contributing_paths_api(paths):
+    """Fake gh_api serving per-path CONTRIBUTING contents (404 for the rest)."""
+
+    def fake(endpoint, params=None):
+        prefix = "repos/octo/repo/contents/"
+        if endpoint.startswith(prefix):
+            rel = endpoint[len(prefix) :]
+            if rel in paths:
+                return {
+                    "content": base64.b64encode(paths[rel].encode()).decode(),
+                    "encoding": "base64",
+                }
+            raise checks.NotFoundError(endpoint)
+        raise checks.NotFoundError(endpoint)
+
+    return fake
+
+
+def test_ai_policy_scans_past_policy_free_first_file(monkeypatch):
+    paths = {
+        "CONTRIBUTING.md": "Be kind. Write tests. Update the docs.\n",
+        ".github/CONTRIBUTING.md": "We do not accept AI-generated contributions.\n",
+    }
+    monkeypatch.setattr(checks, "gh_api", contributing_paths_api(paths))
+    result = checks.check_ai_policy("octo", "repo")
+    assert result["verdict"] == "ban"
+    assert result["source"] == ".github/CONTRIBUTING.md"
+    assert result["snippet"]
+
+
+def test_ai_policy_first_policy_in_search_order_wins(monkeypatch):
+    paths = {
+        "CONTRIBUTING.md": "We do not accept AI-generated contributions.\n",
+        ".github/CONTRIBUTING.md": "All AI-assisted changes must include an Assisted-by trailer.\n",
+    }
+    monkeypatch.setattr(checks, "gh_api", contributing_paths_api(paths))
+    result = checks.check_ai_policy("octo", "repo")
+    assert result["verdict"] == "ban"
+    assert result["source"] == "CONTRIBUTING.md"
+
+
+def test_ai_policy_no_policy_anywhere_still_none_found(monkeypatch):
+    paths = {"CONTRIBUTING.md": "Be kind. Write tests. Update the docs.\n"}
+    monkeypatch.setattr(checks, "gh_api", contributing_paths_api(paths))
+    result = checks.check_ai_policy("octo", "repo")
+    assert result["verdict"] == "none-found"
+
+
 def test_disclosure_language_detected():
     text = "All AI-assisted changes must include an Assisted-by trailer.\n"
     verdict, _ = checks.classify_policy(text)
