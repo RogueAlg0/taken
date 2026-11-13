@@ -667,13 +667,16 @@ _AI_PATHS = [
 
 
 def _map_ai_policy(repository):
+    last_source = None
     for alias, path in _AI_PATHS:
         blob = repository.get(alias)
         if not isinstance(blob, dict):
             continue
         verdict, snippet = checks.classify_policy(blob.get("text") or "")
-        return {"verdict": verdict, "snippet": snippet, "source": path}
-    return {"verdict": "none-found", "snippet": "", "source": None}
+        if verdict != "none-found":
+            return {"verdict": verdict, "snippet": snippet, "source": path}
+        last_source = path
+    return {"verdict": "none-found", "snippet": "", "source": last_source}
 
 
 def _pushed_recency(repository, window_days):

@@ -478,6 +478,43 @@ def test_verdict_matches_rest_findings(monkeypatch):
     assert decide(findings) == decide(rest_findings)
 
 
+def test_map_ai_policy_scans_past_policy_free_first_file():
+    repo = {
+        "ai1": {"text": "Be kind. Write tests."},
+        "ai2": {"text": "We do not accept AI-generated contributions."},
+        "ai3": None,
+        "ai4": None,
+    }
+    result = graphql._map_ai_policy(repo)
+    assert result["verdict"] == "ban"
+    assert result["source"] == ".github/CONTRIBUTING.md"
+    assert result["snippet"]
+
+
+def test_map_ai_policy_first_policy_in_search_order_wins():
+    repo = {
+        "ai1": {"text": "We do not accept AI-generated contributions."},
+        "ai2": {"text": "All AI-assisted changes must include an Assisted-by trailer."},
+        "ai3": None,
+        "ai4": None,
+    }
+    result = graphql._map_ai_policy(repo)
+    assert result["verdict"] == "ban"
+    assert result["source"] == "CONTRIBUTING.md"
+
+
+def test_map_ai_policy_no_policy_anywhere_still_none_found():
+    repo = {
+        "ai1": {"text": "Be kind. Write tests."},
+        "ai2": None,
+        "ai3": None,
+        "ai4": None,
+    }
+    result = graphql._map_ai_policy(repo)
+    assert result["verdict"] == "none-found"
+    assert result["source"] == "CONTRIBUTING.md"
+
+
 def test_merged_pr_state_normalizes_to_closed(monkeypatch):
     """GraphQL MERGED enum maps to REST's state "closed" + merged flag."""
     repo = _repo_node()
