@@ -108,6 +108,20 @@ def check_label(label):
         )
 
 
+def check_language(language):
+    """Raise ValueError if `language` cannot be put in a language: qualifier.
+
+    GitHub search has no escape for a double quote inside a quoted value,
+    so a language like `Python" OR repo:x` would end the quotes early and
+    the rest would be read as query syntax, the same way labels could before
+    #334 (issue #550).
+    """
+    if '"' in language:
+        raise ValueError(
+            f"language {language!r} contains a double quote, which a search query can't hold"
+        )
+
+
 def build_query(labels, language=None, updated_after=None):
     """Build a search/issues query matching any of the given labels.
 
@@ -117,8 +131,9 @@ def build_query(labels, language=None, updated_after=None):
     rate limits throttle burst velocity, not budget, and the old per-label
     loop died 12.5s into a cold run with zero verdicts).
 
-    Raises ValueError for a label check_label() refuses, rather than
-    sending a query that searches for something else.
+    Raises ValueError for a label check_label() refuses, or a language
+    check_language() refuses, rather than sending a query that searches
+    for something else.
     """
     if isinstance(labels, str):
         labels = [labels]
@@ -129,7 +144,9 @@ def build_query(labels, language=None, updated_after=None):
     if updated_after:
         parts.append(f"updated:>={updated_after}")
     if language:
-        parts.append(f"language:{language}")
+        check_language(language)
+        lang_part = f'"{language}"' if any(char.isspace() for char in language) else language
+        parts.append(f"language:{lang_part}")
     return " ".join(parts)
 
 

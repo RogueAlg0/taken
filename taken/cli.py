@@ -422,6 +422,11 @@ def _run_discover_command(parser, args):
             discover.check_label(args.label)
         except ValueError as exc:
             parser.error(f"argument --label: {exc}")
+    if args.language is not None:
+        try:
+            discover.check_language(args.language)
+        except ValueError as exc:
+            parser.error(f"argument --language: {exc}")
     return _run_with_stats(run_discover, args, verbose=args.verbose, debug=args.debug)
 
 
