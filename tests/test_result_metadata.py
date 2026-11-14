@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from taken import checks, cli, discover, mcp_server
+from taken import budget, checks, cli, discover, mcp_server
 
 
 def entry(number):
@@ -187,15 +187,15 @@ def test_discovery_full_page_uses_upstream_completeness(monkeypatch, known_compl
             repository_url="https://api.github.com/repos/o/r",
             updated_at=datetime.now(timezone.utc).isoformat(),
         )
-        for n in range(discover.SEARCH_PER_PAGE)
+        for n in range(discover.SEARCH_MAX_PER_PAGE)
     ]
     rows = checks.SearchResults(items, truncated=False) if known_complete else items
     monkeypatch.setattr(checks, "search_issues_page", lambda *a, **kw: (rows, None))
-    monkeypatch.setattr(discover, "_verify_pool_size", lambda: discover.SEARCH_PER_PAGE)
+    monkeypatch.setattr(discover, "_verify_pool_size", lambda: discover.SEARCH_MAX_PER_PAGE)
     monkeypatch.setattr(discover, "_verify_candidate", lambda o, r, n, *a, **kw: (entry(n), None))
     result = discover.discover(discover.DiscoverOptions(limit=100, jobs=2))
     assert result.truncated is (not known_complete)
-    assert len(result) == discover.SEARCH_PER_PAGE
+    assert len(result) == discover.SEARCH_MAX_PER_PAGE
 
 
 @pytest.mark.parametrize(
@@ -223,3 +223,28 @@ def test_discovery_preserves_search_totals_and_completeness(
     assert result.truncated is expected
     assert len(result) == 2
     assert searched == [[(", ".join(discover.SEARCH_LABELS), 2, total)]]
+
+
+@pytest.mark.parametrize("identity,per_page,pool", [(None, "50", 40), ("someone", "81", 80)])
+def test_combined_search_page_fits_the_verify_pool(monkeypatch, identity, per_page, pool):
+    """The one combined search asks for enough rows to fill the pool (#330)."""
+    asked = []
+
+    def fake_gh_api(endpoint, params=None):
+        asked.append(params["per_page"])
+        rows = [
+            dict(number=n, repository_url="https://api.github.com/repos/o/r")
+            for n in range(int(params["per_page"]))
+        ]
+        return dict(items=rows, total_count=500, incomplete_results=False)
+
+    monkeypatch.setattr(checks, "gh_api", fake_gh_api)
+    budget.activate(identity=identity)
+    candidates, searched, errors = discover._collect_candidates(
+        discover.SEARCH_LABELS, None, "2026-01-01"
+    )
+    assert asked == [per_page]
+    assert len(candidates) == pool
+    assert candidates.truncated is True
+    assert searched == [(", ".join(discover.SEARCH_LABELS), int(per_page), 500)]
+    assert errors == []

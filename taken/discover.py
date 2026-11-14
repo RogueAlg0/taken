@@ -19,6 +19,8 @@ from .verdict import GO, decide
 
 SEARCH_LABELS = ["good first issue", "good-first-issue", "beginner friendly", "help wanted"]
 SEARCH_PER_PAGE = 50
+# GitHub's search API returns at most 100 rows per page.
+SEARCH_MAX_PER_PAGE = 100
 # Baseline verify-pool size; the authenticated budget tier raises it
 # (see taken/budget.py).
 VERIFY_POOL = 40
@@ -76,6 +78,16 @@ class DiscoverOptions:
 def _verify_pool_size():
     """Candidates fully verified per run: baseline, raised when logged in."""
     return budget.effective_cap(VERIFY_POOL, "discover_pool")
+
+
+def _combined_page_size(pool_size):
+    """Rows the combined search asks for: the whole pool plus one (#330).
+
+    The extra row is what lets _collect_candidates tell a pool that is
+    exactly full from one that left issues behind. Never fewer than
+    SEARCH_PER_PAGE, never more than the search API's 100-per-page limit.
+    """
+    return min(SEARCH_MAX_PER_PAGE, max(SEARCH_PER_PAGE, pool_size + 1))
 
 
 # author_association values that mean the commenter can speak for the repo.
@@ -374,15 +386,16 @@ def _collect_candidates(labels, language, updated_after):
     search failed, empty on the normal path.
     """
     query = build_query(labels, language=language, updated_after=updated_after)
+    pool_size = _verify_pool_size()
+    per_page = _combined_page_size(pool_size)
     try:
-        items, total = checks.search_issues_page(query, per_page=SEARCH_PER_PAGE)
+        items, total = checks.search_issues_page(query, per_page=per_page)
     except checks.TakenError:
         return _collect_candidates_per_label(labels, language, updated_after)
-    pool_size = _verify_pool_size()
     observed = _pool_from_items(items, set(), pool_size + 1)
     candidates = _CandidatePool(observed[:pool_size])
     candidates.truncated = (
-        getattr(items, "truncated", len(items) >= SEARCH_PER_PAGE) or len(observed) > pool_size
+        getattr(items, "truncated", len(items) >= per_page) or len(observed) > pool_size
     )
     searched = [(", ".join(labels), len(items), total)]
     return candidates, searched, []
