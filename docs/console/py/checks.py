@@ -569,20 +569,30 @@ def _cache_key(endpoint, params):
 
 _IDENTITY = None
 _IDENTITY_FETCHED = False
+_IDENTITY_FETCHED_AT = None
+# Re-resolve the gh identity after this TTL so that a `gh auth switch` in a
+# long-running process (e.g. the MCP server) cannot keep serving a stale
+# identity's cache namespace for its whole lifetime.
+_IDENTITY_TTL_SECONDS = 30.0
 
 
 def _github_identity():
-    """Return the authenticated `gh` login (lowercased), memoized per process.
+    """Return the authenticated `gh` login (lowercased), memoized with a short TTL.
 
     Cache entries are namespaced by identity so that switching identities
     (`gh auth switch`, or a shared TAKEN_CACHE_DIR on a shared machine)
     cannot serve one identity's cached data to another. Returns None when
     the identity cannot be determined; callers fail closed in that case.
     """
-    global _IDENTITY, _IDENTITY_FETCHED
+    global _IDENTITY, _IDENTITY_FETCHED, _IDENTITY_FETCHED_AT
+    now = time.monotonic()
     if _IDENTITY_FETCHED:
-        return _IDENTITY
+        # A None timestamp (e.g. a seeded/reset state) counts as freshly
+        # resolved; only a real fetch records a timestamp to TTL against.
+        if _IDENTITY_FETCHED_AT is None or (now - _IDENTITY_FETCHED_AT) < _IDENTITY_TTL_SECONDS:
+            return _IDENTITY
     _IDENTITY_FETCHED = True
+    _IDENTITY_FETCHED_AT = now
     try:
         proc = subprocess.run(
             ["gh", "api", "user", "--jq", ".login"],
