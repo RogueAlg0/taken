@@ -589,9 +589,7 @@ def _github_identity():
     if _IDENTITY_FETCHED:
         # A None timestamp (e.g. a seeded/reset state) counts as freshly
         # resolved; only a real fetch records a timestamp to TTL against.
-        if _IDENTITY_FETCHED_AT is None or (
-            now - _IDENTITY_FETCHED_AT
-        ) < _IDENTITY_TTL_SECONDS:
+        if _IDENTITY_FETCHED_AT is None or (now - _IDENTITY_FETCHED_AT) < _IDENTITY_TTL_SECONDS:
             return _IDENTITY
     _IDENTITY_FETCHED = True
     _IDENTITY_FETCHED_AT = now
