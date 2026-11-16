@@ -40,10 +40,12 @@ except ImportError:  # pydantic ships with the `mcp` dependency
 from taken import __version__, budget, checks, discover, graphql
 from taken.verdict import CAUTION, GO, TAKEN, decide
 
-_ERROR_PAYLOAD_DOCS = """Error payloads carry `error` plus `error_code`: RateLimitError ->
-`rate_limited`, NotFoundError -> `not_found`, HTTP 401/CLI authentication
-failures -> `auth_failed`, subprocess timeouts -> `timeout`, other
-TakenError failures -> `unknown`."""
+_ERROR_PAYLOAD_DOCS = """Every payload, success or error, carries `effective_parameters`
+(the options the call ran with), plus `target` when the call names one
+repository or issue. Error payloads carry `error` plus `error_code`:
+RateLimitError -> `rate_limited`, NotFoundError -> `not_found`, HTTP
+401/CLI authentication failures -> `auth_failed`, subprocess timeouts ->
+`timeout`, other TakenError failures -> `unknown`."""
 
 
 def _expand_error_payload_docs(function):
@@ -246,10 +248,25 @@ def check_issue(
     else:
         mode = None
     thresholds = _decay_thresholds(pr_idle_days, claim_silence_days, claim_silence_complex_days)
+    effective_parameters = {
+        "me": me,
+        "graphql": graphql,
+        "persistent_session": persistent_session,
+        "thresholds": thresholds,
+    }
     try:
-        return _check_one(owner, repo, issue_number, me=me, mode=mode, thresholds=thresholds)
+        payload = _check_one(owner, repo, issue_number, me=me, mode=mode, thresholds=thresholds)
     except (checks.TakenError, subprocess.TimeoutExpired) as exc:
-        return {"target": f"{owner}/{repo}#{issue_number}", **_error_payload(exc)}
+        return {
+            "target": f"{owner}/{repo}#{issue_number}",
+            "effective_parameters": effective_parameters,
+            **_error_payload(exc),
+        }
+    return {
+        "target": payload.pop("target"),
+        "effective_parameters": effective_parameters,
+        **payload,
+    }
 
 
 @_expand_error_payload_docs
@@ -459,7 +476,9 @@ def discover_candidates(
     Searches GitHub for good-first-issue style issues, runs taken's full
     verification on each, and returns the ranked candidates. Each result
     carries `friendly_labels` (first-time-contributor labels on the issue)
-    and `welcoming` (repo-level signs contributions are welcome).
+    and `welcoming` (repo-level signs contributions are welcome). There is
+    no top-level `target`: the search spans GitHub, so each result carries
+    its own.
 
     __ERROR_PAYLOAD_DOCS__
 

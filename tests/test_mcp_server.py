@@ -182,8 +182,56 @@ def test_check_issue_returns_error_dict(monkeypatch):
         raise checks.TakenError("network down")
 
     monkeypatch.setattr(checks, "gh_api", boom)
+    payload = check_issue("octo", "repo", 1, me="octocat", pr_idle_days=30)
+    assert payload == {
+        "target": "octo/repo#1",
+        "effective_parameters": {
+            "me": "octocat",
+            "graphql": False,
+            "persistent_session": False,
+            "thresholds": {**checks.default_thresholds(), "pr_idle_days": 30},
+        },
+        "error": "network down",
+        "error_code": "unknown",
+    }
+
+
+def test_check_issue_echoes_effective_default_parameters(faked):
+    # Issue #342: check_issue carries effective_parameters like the
+    # other two tools.
     payload = check_issue("octo", "repo", 1)
-    assert payload == {"target": "octo/repo#1", "error": "network down", "error_code": "unknown"}
+    assert payload["effective_parameters"] == {
+        "me": None,
+        "graphql": False,
+        "persistent_session": False,
+        "thresholds": checks.default_thresholds(),
+    }
+
+
+def test_check_issue_echoes_custom_parameters(monkeypatch):
+    monkeypatch.setattr(
+        graphql, "run_checks_with_fallback", lambda *args, **kwargs: {"transport": "graphql"}
+    )
+    _stub_tool_output(monkeypatch)
+    payload = check_issue(
+        "octo",
+        "repo",
+        1,
+        me="octocat",
+        graphql=True,
+        claim_silence_days=3,
+        claim_silence_complex_days=5,
+    )
+    assert payload["effective_parameters"] == {
+        "me": "octocat",
+        "graphql": True,
+        "persistent_session": False,
+        "thresholds": {
+            "pr_idle_days": checks.DEFAULT_PR_IDLE_DAYS,
+            "claim_silence_days": 3,
+            "claim_silence_complex_days": 5,
+        },
+    }
 
 
 def test_check_issue_carries_friendly_and_welcoming(monkeypatch):
@@ -652,3 +700,25 @@ def test_tools_return_machine_readable_error_codes(monkeypatch, error, code, too
         )
     assert payload["error_code"] == code
     assert payload["error"] == str(error)
+
+
+@pytest.mark.parametrize("tool", ["check_issue", "scan_repo", "discover_candidates"])
+def test_tools_share_the_error_envelope(monkeypatch, tool):
+    # Issue #342: every tool's error payload carries the same keys, and
+    # `target` is there whenever the call names one repository or issue.
+    def boom(*args, **kwargs):
+        raise checks.TakenError("network down")
+
+    monkeypatch.setattr(checks, "gh_api", boom)
+    monkeypatch.setattr(discover, "discover", boom)
+    calls = {
+        "check_issue": lambda: check_issue("octo", "repo", 1),
+        "scan_repo": lambda: scan_repo("octo", "repo"),
+        "discover_candidates": lambda: discover_candidates(),
+    }
+    payload = calls[tool]()
+    expected = {"effective_parameters", "error", "error_code"}
+    if tool != "discover_candidates":
+        expected.add("target")
+    assert set(payload) == expected
+    assert payload["effective_parameters"]["thresholds"] == checks.default_thresholds()
