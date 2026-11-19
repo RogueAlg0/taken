@@ -161,19 +161,23 @@ jobs:
           dpkg-deb --build "$PKGDIR" "taken_${VER}_all.deb"
           dpkg-deb --info "taken_${VER}_all.deb"
       - name: Attest SLSA build provenance for the .deb
+        id: attest-deb
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: 'taken_*_all.deb'
-      - name: Attach .deb to GitHub release
+      - name: Attach .deb and provenance bundle to GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUNDLE_PATH: ${{ steps.attest-deb.outputs.bundle-path }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           DEB="taken_${TAG#v}_all.deb"
+          BUNDLE="${DEB}.intoto.jsonl"
+          cp "$BUNDLE_PATH" "$BUNDLE"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" --title "$TAG" --generate-notes
           fi
-          gh release upload "$TAG" "$DEB" --clobber
+          gh release upload "$TAG" "$DEB" "$BUNDLE" --clobber
 
   build-windows:
     # One-file Windows executables for WinGet distribution. Built with
@@ -184,6 +188,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     permissions:
+      id-token: write
+      attestations: write
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -219,17 +225,25 @@ jobs:
               z.write("dist/taken-mcp.exe", "taken-mcp.exe")
           print("wrote", name)
           EOF
-      - name: Attach Windows zip to GitHub release
+      - name: Attest SLSA build provenance for the Windows zip
+        id: attest-windows
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: 'taken_*_windows-x64.zip'
+      - name: Attach Windows zip and provenance bundle to GitHub release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUNDLE_PATH: ${{ steps.attest-windows.outputs.bundle-path }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           ZIP="taken_${TAG#v}_windows-x64.zip"
+          BUNDLE="${ZIP}.intoto.jsonl"
+          cp "$BUNDLE_PATH" "$BUNDLE"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" --title "$TAG" --generate-notes
           fi
-          gh release upload "$TAG" "$ZIP" --clobber
+          gh release upload "$TAG" "$ZIP" "$BUNDLE" --clobber
 
   npm:
     name: Publish npm installer (taken-gh)
