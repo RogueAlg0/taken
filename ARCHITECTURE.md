@@ -80,7 +80,7 @@ These are load-bearing. Do not break them without discussion.
 - **Version strings move together.** `pyproject.toml`, `_taken_pkg.__version__`
   and the `taken --version` string in `docs/console/py/webshim.py` must match;
   CI checks both console values, including the version used by the transport's
-  User-Agent.
+  User-Agent. CI also checks that `CITATION.cff` carries the same version.
 
 ## Data flow: one issue
 
