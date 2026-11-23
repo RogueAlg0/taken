@@ -169,10 +169,15 @@ def test_cache_dir_is_public(tmp_path, monkeypatch):
 def test_clear_cache_flag_empty_default_cache(tmp_path, capsys, monkeypatch):
     """Empty default cache directory (~/.cache/taken) is safely cleared."""
     fake_home = tmp_path / "fake_home"
+    # expanduser("~") reads HOME on POSIX but USERPROFILE on Windows.
     monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
     monkeypatch.delenv("TAKEN_CACHE_DIR", raising=False)
     default_cache = fake_home / ".cache" / "taken"
     default_cache.mkdir(parents=True)
+    # Stop before --clear-cache if the default path escaped the fake home,
+    # so the test can never delete a real cache.
+    assert checks.cache_dir() == str(default_cache)
     assert cli.main(["--clear-cache"]) == 0
     assert not default_cache.exists()
     assert "cleared 0 cache entries" in capsys.readouterr().out
