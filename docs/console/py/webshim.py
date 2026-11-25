@@ -50,7 +50,7 @@ _taken_pkg.__path__ = [os.path.dirname(os.path.abspath(__file__))]
 # package reads the version from the installed distribution metadata; the
 # synthesized package must carry the value directly. Keep it in sync with
 # pyproject.toml, like the `taken --version` string below.
-_taken_pkg.__version__ = "0.9.2"
+_taken_pkg.__version__ = "0.9.3"
 sys.modules["taken"] = _taken_pkg
 
 checks = importlib.import_module("checks")
@@ -409,7 +409,7 @@ def run_command(line):
     if low in ("taken --help", "help"):
         return HELP
     if low == "taken --version":
-        return "taken 0.9.2 (Pyodide build: taken's real Python code, running in your browser)"
+        return "taken 0.9.3 (Pyodide build: taken's real Python code, running in your browser)"
     if low.startswith("taken --discover"):
         discover_rest = low[len("taken --discover") :].strip()
         dlimit = WEB_DISCOVER_DEFAULT

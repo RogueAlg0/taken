@@ -10,8 +10,106 @@ the fragments into this file.
 
 <!-- towncrier release notes start -->
 
+## [0.9.3] - 2026-11-25
+
+### Added
+
+- Send request-scoped MCP progress notifications during repository scans and
+  candidate verification, including checks that return an error. (#50)
+- Attach in-toto SLSA build provenance bundles (.intoto.jsonl) alongside
+  release assets on GitHub releases, enabling offline verification via `gh
+  attestation verify` and satisfying the OpenSSF Scorecard Signed-Releases
+  check. (#469)
+- Changelog entries are now recorded as fragment files in the `changes/`
+  directory and assembled into `CHANGELOG.md` at release time. Contributors
+  no longer edit `CHANGELOG.md` directly, so parallel pull requests cannot
+  conflict on it.
+
+### Changed
+
+- Report explicit truncation and candidate counts in MCP scan/discovery
+  responses and CLI JSON. Repository-scan and discovery JSON now use an object
+  with a `results` array; direct issue-target batches retain their array
+  format. Empty discovery also emits JSON metadata. (#29)
+- The MCP `check_issue` tool now echoes `effective_parameters` (`me`,
+  `graphql`, `persistent_session` and the resolved stale-claim thresholds) on
+  both success and error payloads, like `scan_repo` and `discover_candidates`.
+  The tool descriptions now say that `target` appears when a call names one
+  repository or issue, which is why `discover_candidates` has none. (#342)
+
+### Removed
+
+- The unused `checks._pace_search()` wrapper is gone; search pacing is
+  `checks._wait_search_pace()` under the search lock, and its behavior
+  stays pinned by `tests/test_rate_limit.py`. (#329)
+
 ### Fixed
+
+- Validate linked pull request responses in timeline checks so malformed API
+  data produces a clear error instead of a traceback. (#119)
+- Reject pull request numbers as invalid issue targets instead of scoring them
+  as contribution opportunities, including pre-fetched payloads and the CLI,
+  MCP and browser-console paths. (#203)
+- The issue-check GET path now treats null labels and assignees as empty
+  collections instead of raising a TypeError. (#328)
+- The combined discover search now asks for enough results to fill the verify
+  pool, so a logged-in run can verify all 80 candidates instead of stopping at
+  50. (#330)
+- Surface capped PR scans in health reports with a human-readable warning and a
+  `pr_scan_truncated` JSON field, so incomplete stale PR counts are visible.
+  (#332)
+- The maintainer health report now marks the issue listing as truncated only
+  when an additional open issue exists beyond the configured limit. The extra
+  issue is used only to determine truncation and is not included in report
+  results. (#333)
 - `--discover --label` and the MCP `discover_candidates` tool now reject a label containing a double quote instead of splicing it into the search query, where it ended the quoted term early and the rest was read as query syntax (#334).
+- The `searched:` line from `--discover` now shows the total the search API
+  reports next to the page that was read, for example `(50 of 1234)`, and
+  `on_searched` entries carry it as a third field. Before, the page length
+  alone read like the size of the whole candidate pool. (#337)
+- Every CLI usage error now exits 3, as documented. Misused flags such as
+  `--discover` with targets, `--health` with `--file` or the wrong number of
+  targets, a missing target, an unknown flag, or a rejected flag value used to
+  exit 2, which is the CAUTION code. (#338)
+- `--rest` and `TAKEN_REST=1` now force the REST path even when
+  `--persistent-session` or `TAKEN_PERSISTENT_SESSION=1` is set, as the escape
+  hatch promises. Before, an exported `TAKEN_PERSISTENT_SESSION=1` left no way
+  to force REST. (#340)
+- The generated CLI reference `docs/takendocs.md` is up to date again (it was
+  missing `--allocation`, `--explore-floor`, `--health`, `--rest` and the claim
+  and PR day flags), and CI now regenerates it and fails when it drifts from
+  `taken --help`. (#346)
+- The docs console starts again. docs/console/py/ now carries the vendored
+  transport.py copy that checks.py imports, and webshim.py sets __version__
+  on the synthesized taken package. The docs-sync CI job and the
+  vendored-sync workflow now cover transport.py. (#476)
+- The health report no longer counts a zero-comment issue as skipped when the
+  API budget is nearly spent. Such an issue needs no comment fetch, so it is
+  judged from the listing alone and still appears as untriaged when it carries
+  no labels. (#477)
+- The discover command no longer prints a negative age for an issue or
+  repository with a future update timestamp. Ages below zero are clamped to
+  zero in both the CLI and web console. (#478)
+- The docs-sync CI check now validates the console's synthesized package
+  version as well as its `taken --version` output, catching a stale transport
+  User-Agent version when only the displayed version is updated. (#479)
+- Forward `--limit` to `--health` mode: an explicit `--limit` now caps the
+  health issue listing instead of being silently ignored (the default stays
+  100). (#503)
+- `CITATION.cff` now carries the package version (0.9.3), and CI fails when it
+  drifts from `pyproject.toml`. (#576)
+- `taken --discover --jobs 0` now exits 3 before the budget identity probe, so
+  the usage error no longer runs a `gh` call first. (#577)
+- Date-proof the GraphQL shape-parity test fixture so its canned pushedAt never
+  ages past the 30-day dormancy line.
+- Fixed the truncation stays-GO test fixture ageing past the repo health
+  window; fixture dates are now computed relative to the run date.
+
+### Security
+
+- `opentelemetry-api` is pinned to 1.45.2 in the lock file, fixing
+  quadratic-time `traceparent` parsing (GHSA-mf5v-w3w3-f6cg). The package
+  arrives transitively through `mcp`. (#581)
 
 ## [0.9.2] - 2026-10-13
 
