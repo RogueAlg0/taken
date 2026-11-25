@@ -20,7 +20,7 @@ raises TransportAuthError and the caller falls back to the subprocess
 path: degraded, not dead.
 
 Pacing: every request first goes through the shared token-bucket pacer
-(~/workspace/bin/gh_throttle.py) when it is available, so old and new
+when one is configured (TAKEN_THROTTLE_BIN_DIR), so old and new
 transports share one budget during rollout. A second, additive layer
 reads X-RateLimit-Remaining / X-RateLimit-Reset on every response and
 sleeps preemptively when the budget is nearly spent.
@@ -45,13 +45,14 @@ _USER_AGENT = f"taken/{__version__} (httpx)"
 # Prefix for the Authorization header value (S1192: defined once).
 _BEARER_PREFIX = "Bearer "
 
-# Well-known locations for this environment's credential broker and the
-# shared token-bucket pacer (the same paths the project's own `gh` shim
-# uses). Both are optional: when absent, auth falls back to
+# Optional locations for a credential broker and the shared token-bucket
+# pacer, set through the environment (TAKEN_CREDENTIAL_BROKER_DIR and
+# TAKEN_THROTTLE_BIN_DIR). When unset, auth falls back to
 # GH_TOKEN/GITHUB_TOKEN (then to the subprocess path) and pacing relies
-# on the header-aware backoff alone.
-_CREDENTIAL_BROKER_DIR = "/opt/hatch/skills/skill-creator/bin"
-_THROTTLE_BIN_DIR = os.path.expanduser("~/workspace/bin")
+# on the header-aware backoff alone. There are no default paths: a
+# hardcoded location would only ever be right on one machine.
+_CREDENTIAL_BROKER_DIR = os.environ.get("TAKEN_CREDENTIAL_BROKER_DIR")
+_THROTTLE_BIN_DIR = os.environ.get("TAKEN_THROTTLE_BIN_DIR")
 
 # Preemptive rate-limit sleep: when the last response showed this many (or
 # fewer) requests remaining, wait for the reset window before sending more.
@@ -208,8 +209,12 @@ def _broker_entry_fn():
         return dynamic_credential_entry
     except ImportError:
         pass
-    if os.path.isdir(_CREDENTIAL_BROKER_DIR) and _CREDENTIAL_BROKER_DIR not in sys.path:
-        # Same well-known broker path the project's own `gh` shim uses.
+    if (
+        _CREDENTIAL_BROKER_DIR
+        and os.path.isdir(_CREDENTIAL_BROKER_DIR)
+        and _CREDENTIAL_BROKER_DIR not in sys.path
+    ):
+        # Broker dir comes from TAKEN_CREDENTIAL_BROKER_DIR, when set.
         sys.path.insert(0, _CREDENTIAL_BROKER_DIR)
         try:
             from dynamic_credentials import (
@@ -276,7 +281,7 @@ def _load_throttle():
         return _throttle_fn
     except ImportError:
         pass
-    if os.path.isdir(_THROTTLE_BIN_DIR) and _THROTTLE_BIN_DIR not in sys.path:
+    if _THROTTLE_BIN_DIR and os.path.isdir(_THROTTLE_BIN_DIR) and _THROTTLE_BIN_DIR not in sys.path:
         sys.path.insert(0, _THROTTLE_BIN_DIR)
         try:
             from gh_throttle import throttle

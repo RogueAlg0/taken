@@ -17,20 +17,28 @@ from taken import checks, transport
 @pytest.fixture
 def clean_transport(monkeypatch):
     """Isolate transport module globals and the environment per test."""
+    # Remember the broker/pacer dirs the transport is configured to use,
+    # so they can be stripped from sys.path below. They come from the
+    # environment (TAKEN_CREDENTIAL_BROKER_DIR / TAKEN_THROTTLE_BIN_DIR),
+    # never from a hardcoded path.
+    broker_dir = transport._CREDENTIAL_BROKER_DIR
+    throttle_dir = transport._THROTTLE_BIN_DIR
     monkeypatch.setattr(transport, "_surrogate", None)
     monkeypatch.setattr(transport, "_client", None)
     monkeypatch.setattr(transport, "_rate_limit_state", {"remaining": None, "reset": None})
     monkeypatch.setattr(transport, "_throttle_checked", False)
     monkeypatch.setattr(transport, "_throttle_fn", None)
-    # Point the well-known broker/pacer dirs at missing paths so tests
-    # control auth and pacing explicitly; strip them from sys.path too in
-    # case an earlier test caused an import.
+    # Point the broker/pacer dirs at missing paths so tests control auth
+    # and pacing explicitly; strip the configured dirs from sys.path too
+    # in case an earlier test caused an import.
     monkeypatch.setattr(transport, "_CREDENTIAL_BROKER_DIR", "/nonexistent-broker-dir")
     monkeypatch.setattr(transport, "_THROTTLE_BIN_DIR", "/nonexistent-throttle-dir")
     for var in (
         "GH_TOKEN",
         "GITHUB_TOKEN",
         "TAKEN_TRANSPORT",
+        "TAKEN_CREDENTIAL_BROKER_DIR",
+        "TAKEN_THROTTLE_BIN_DIR",
         "SSL_CERT_FILE",
         "REQUESTS_CA_BUNDLE",
         "CURL_CA_BUNDLE",
@@ -45,7 +53,7 @@ def clean_transport(monkeypatch):
     monkeypatch.setattr(
         sys,
         "path",
-        [p for p in sys.path if "skill-creator" not in p and "workspace/bin" not in p],
+        [p for p in sys.path if p != broker_dir and p != throttle_dir],
     )
     return transport
 
