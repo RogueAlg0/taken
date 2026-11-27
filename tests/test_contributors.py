@@ -1,11 +1,23 @@
 """Tests for the contributor-breadth health signal."""
 
+import zlib
+
 from taken import checks
 
+_UNSET = object()
 
-def commit(login=None, email=None):
+
+def commit(login=None, email=None, user_id=_UNSET):
     entry = {"commit": {"author": {"email": email or "dev@example.com"}}}
-    entry["author"] = {"login": login} if login is not None else None
+    if login is None:
+        entry["author"] = None
+    else:
+        user = {"login": login}
+        if user_id is _UNSET:
+            user["id"] = zlib.crc32(login.encode("utf-8")) + 1
+        elif user_id is not None:
+            user["id"] = user_id
+        entry["author"] = user
     return entry
 
 
@@ -75,3 +87,23 @@ def test_repo_health_reports_contributors(monkeypatch):
     assert health["contributors"] == 2
     assert health["contributors_window_days"] == checks.CONTRIBUTORS_WINDOW_DAYS
     assert "stars" not in health
+
+
+def test_same_id_under_two_logins_is_one_contributor(monkeypatch):
+    fake = make_fake([[commit("alice", user_id=42), commit("alice-renamed", user_id=42)]])
+    monkeypatch.setattr(checks, "gh_api", fake)
+    assert checks.count_recent_contributors("octo", "repo") == 1
+
+
+def test_same_login_with_two_ids_is_two_contributors(monkeypatch):
+    fake = make_fake([[commit("alice", user_id=42), commit("alice", user_id=99)]])
+    monkeypatch.setattr(checks, "gh_api", fake)
+    assert checks.count_recent_contributors("octo", "repo") == 2
+
+
+def test_linked_user_without_id_is_unresolvable(monkeypatch):
+    fake = make_fake(
+        [[commit("alice", email="a@example.com", user_id=None), commit("alice", user_id=42)]]
+    )
+    monkeypatch.setattr(checks, "gh_api", fake)
+    assert checks.count_recent_contributors("octo", "repo") == 1

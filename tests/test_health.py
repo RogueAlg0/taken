@@ -1,5 +1,6 @@
 """Tests for issue #187: maintainer-facing repo health overview."""
 
+import zlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -8,15 +9,25 @@ from taken import checks, health
 from taken.health import HealthOptions, repo_health
 
 NOW = datetime(2026, 10, 1, 12, 0, 0, tzinfo=timezone.utc)
+_UNSET = object()
+
+
+def _uid(login):
+    return zlib.crc32(login.lower().encode("utf-8")) + 1
 
 
 def ts(days_ago):
     return (NOW - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def make_comment(login, body, days_ago, association="NONE"):
+def make_comment(login, body, days_ago, association="NONE", user_id=_UNSET):
+    user = {"login": login}
+    if user_id is _UNSET:
+        user["id"] = _uid(login)
+    elif user_id is not None:
+        user["id"] = user_id
     return {
-        "user": {"login": login},
+        "user": user,
         "body": body,
         "created_at": ts(days_ago),
         "author_association": association,
@@ -42,7 +53,7 @@ def make_pr(number, updated_days_ago, draft=False):
         "number": number,
         "title": f"pr {number}",
         "html_url": f"https://github.com/o/r/pull/{number}",
-        "user": {"login": "contrib"},
+        "user": {"id": _uid("contrib"), "login": "contrib"},
         "updated_at": ts(updated_days_ago),
         "draft": draft,
         "state": "open",
@@ -54,6 +65,9 @@ def make_gh(issues=(), comments_map=None, pulls=()):
 
     def fake(endpoint, params=None):
         params = params or {}
+        if endpoint.startswith("users/"):
+            login = endpoint.split("/", 1)[1]
+            return {"id": _uid(login), "login": login}
         if params.get("page", "1") != "1":
             return []
         if endpoint.endswith("/comments"):
@@ -543,3 +557,62 @@ def test_cli_health_flags():
     assert args.pr_stale_days == health.DEFAULT_PR_STALE_DAYS
     assert args.gfi_stale_days == health.DEFAULT_GFI_STALE_DAYS
     assert args.json is True
+
+
+def test_health_same_id_two_logins_is_one_claimant(monkeypatch):
+    """A claimant who renames their login keeps one claim and clears quiet claims."""
+    issues = (
+        make_issue(1, 20, comment_count=2),
+        make_issue(2, 20, comment_count=3),
+    )
+    comments = {
+        1: [
+            make_comment("alice", "please assign me", 20, user_id=42),
+            make_comment("alice-new", "I'd like to take this", 10, user_id=42),
+        ],
+        2: [
+            make_comment("bob", "I'd like to take this", 20, user_id=77),
+            make_comment("owner", "go for it", 10, association="OWNER", user_id=500),
+            make_comment("bob-new", "working on it now", 2, user_id=77),
+        ],
+    }
+    monkeypatch.setattr(checks, "gh_api", make_gh(issues, comments))
+    report = run(issues, comments)
+    assert len(report.waiting_claims) == 1
+    assert report.waiting_claims[0].claimant == "alice-new"
+    assert report.waiting_claims[0].claimant_id == 42
+    assert report.waiting_claims[0].age_days == 10
+    assert report.quiet_claims == []
+
+
+def test_health_one_login_two_ids_is_two_people(monkeypatch):
+    """One login under two different numeric IDs is tracked as two separate people."""
+    issues = (
+        make_issue(1, 20, comment_count=2),
+        make_issue(2, 20, comment_count=3),
+    )
+    comments = {
+        1: [
+            make_comment("alice", "please assign me", 20, user_id=42),
+            make_comment("alice", "I'd like to take this", 10, user_id=99),
+        ],
+        2: [
+            make_comment("bob", "I'd like to take this", 20, user_id=77),
+            make_comment("owner", "go for it", 10, association="OWNER", user_id=500),
+            make_comment("bob", "unrelated user with same login", 2, user_id=88),
+        ],
+    }
+    monkeypatch.setattr(checks, "gh_api", make_gh(issues, comments))
+    report = run(issues, comments)
+    assert [c.claimant_id for c in report.waiting_claims] == [42, 99]
+    assert len(report.quiet_claims) == 1
+    assert report.quiet_claims[0].claimant_id == 77
+
+
+def test_health_idless_comment_is_unresolvable(monkeypatch):
+    issues = (make_issue(1, 20, comment_count=1),)
+    comments = {1: [make_comment("alice", "please assign me", 20, user_id=None)]}
+    monkeypatch.setattr(checks, "gh_api", make_gh(issues, comments))
+    report = run(issues, comments)
+    assert report.waiting_claims == []
+    assert report.quiet_claims == []

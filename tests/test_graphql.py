@@ -20,15 +20,15 @@ def _issue_node(**over):
         "title": "Some issue",
         "url": "https://github.com/o/r/issues/1",
         "createdAt": "2026-09-01T00:00:00Z",
-        "author": {"login": "someone"},
-        "assignees": {"nodes": [{"login": "dev"}]},
+        "author": {"login": "someone", "databaseId": 1},
+        "assignees": {"nodes": [{"login": "dev", "databaseId": 2}]},
         "labels": {"nodes": [{"name": "good first issue"}]},
         "comments": {
             "totalCount": 1,
             "pageInfo": {"hasNextPage": False, "endCursor": None},
             "nodes": [
                 {
-                    "author": {"login": "volunteer"},
+                    "author": {"login": "volunteer", "databaseId": 3},
                     "body": "I would like to work on this",
                     "createdAt": "2026-09-02T00:00:00Z",
                     "url": "https://github.com/o/r/issues/1#c1",
@@ -47,7 +47,7 @@ def _issue_node(**over):
                         "state": "OPEN",
                         "mergedAt": None,
                         "url": "https://github.com/o/r/pull/7",
-                        "author": {"login": "dev"},
+                        "author": {"login": "dev", "databaseId": 2},
                         "repository": {"nameWithOwner": "o/r"},
                     },
                 }
@@ -75,8 +75,8 @@ def _repo_node(**over):
                 "history": {
                     "pageInfo": {"hasNextPage": False, "endCursor": None},
                     "nodes": [
-                        {"author": {"user": {"login": "dev"}, "email": "d@x"}},
-                        {"author": {"user": {"login": "dev"}, "email": "d@x"}},
+                        {"author": {"user": {"login": "dev", "databaseId": 2}, "email": "d@x"}},
+                        {"author": {"user": {"login": "dev", "databaseId": 2}, "email": "d@x"}},
                         {"author": {"user": None, "email": "anon@x"}},
                     ],
                 }
@@ -408,17 +408,24 @@ def test_findings_shape_matches_rest_contract(monkeypatch):
         "title",
         "labels",
         "assignees",
+        "assignee_ids",
         "comment_count",
         "author",
+        "author_id",
         "url",
         "created_at",
     }
     assert findings["issue"]["state"] == "open"
     assert findings["issue"]["assignees"] == ["dev"]
+    assert findings["issue"]["assignee_ids"] == [2]
+    assert findings["issue"]["author"] == "someone"
+    assert findings["issue"]["author_id"] == 1
     assert findings["issue"]["labels"] == ["good first issue"]
     assert findings["linked_prs"][0]["number"] == 7
+    assert findings["linked_prs"][0]["author_id"] == 2
     assert findings["linked_prs"][0]["state"] == "open"
     assert findings["claimants"][0]["author"] == "volunteer"
+    assert findings["claimants"][0]["author_id"] == 3
     assert findings["ai_policy"]["verdict"] == "ban"
     assert findings["ai_policy"]["source"] == "CONTRIBUTING.md"
     assert findings["repo_health"]["recent_merges"] == 1
@@ -557,7 +564,7 @@ def test_comment_pagination_follows_cursor(monkeypatch):
         "pageInfo": {"hasNextPage": False, "endCursor": None},
         "nodes": [
             {
-                "author": {"login": "second"},
+                "author": {"login": "second", "databaseId": 4},
                 "body": "I'll take this on",
                 "createdAt": "2026-09-03T00:00:00Z",
                 "url": "https://github.com/o/r/issues/1#c2",
@@ -950,3 +957,109 @@ def test_thread_session_registry_does_not_keep_finished_threads_alive(monkeypatc
     _thread_sessions(3).clear()
     gc.collect()
     assert len(graphql._THREAD_SESSIONS) == 0
+
+
+def test_issue_query_requests_database_id():
+    assert "databaseId" in graphql.ISSUE_QUERY
+    assert "...ActorIdentity" in graphql.ISSUE_QUERY
+    assert "assignees(first: 20) { nodes { login databaseId } }" in graphql.ISSUE_QUERY
+    assert "nodes { author { user { login databaseId } email } }" in graphql.ISSUE_QUERY
+
+
+def test_graphql_commit_dedup_keys_on_database_id():
+    same_person = {
+        "defaultBranchRef": {
+            "target": {
+                "history": {
+                    "nodes": [
+                        {"author": {"user": {"login": "alice", "databaseId": 42}, "email": "a@x"}},
+                        {
+                            "author": {
+                                "user": {"login": "alice-new", "databaseId": 42},
+                                "email": "a2@x",
+                            }
+                        },
+                    ]
+                }
+            }
+        }
+    }
+    assert len(graphql._collect_contributors(same_person)) == 1
+
+    two_people = {
+        "defaultBranchRef": {
+            "target": {
+                "history": {
+                    "nodes": [
+                        {"author": {"user": {"login": "alice", "databaseId": 42}, "email": "a@x"}},
+                        {"author": {"user": {"login": "alice", "databaseId": 99}, "email": "a@x"}},
+                    ]
+                }
+            }
+        }
+    }
+    assert len(graphql._collect_contributors(two_people)) == 2
+
+    login_only = {
+        "defaultBranchRef": {
+            "target": {
+                "history": {
+                    "nodes": [
+                        {"author": {"user": {"login": "alice"}, "email": "a@x"}},
+                    ]
+                }
+            }
+        }
+    }
+    assert len(graphql._collect_contributors(login_only)) == 0
+
+
+def test_graphql_claimant_identity_across_rename_and_takeover(monkeypatch):
+    now = datetime.now(timezone.utc)
+    claim_ts = (now - timedelta(days=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    recent_ts = (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    repo_renamed = _repo_node_no_taken()
+    repo_renamed["issue"]["comments"] = {
+        "totalCount": 2,
+        "pageInfo": {"hasNextPage": False, "endCursor": None},
+        "nodes": [
+            {
+                "author": {"login": "alice", "databaseId": 42},
+                "body": "I would like to work on this",
+                "createdAt": claim_ts,
+                "url": "https://github.com/o/r/issues/1#c1",
+            },
+            {
+                "author": {"login": "alice-new", "databaseId": 42},
+                "body": "Still working on it",
+                "createdAt": recent_ts,
+                "url": "https://github.com/o/r/issues/1#c2",
+            },
+        ],
+    }
+    findings = _run_with_fake_transport(monkeypatch, _payload(repo_renamed))
+    assert findings["claimants"][0]["author_id"] == 42
+    assert findings["claimants"][0]["days_since_claimant_activity"] == 1
+
+    repo_takeover = _repo_node_no_taken()
+    repo_takeover["issue"]["comments"] = {
+        "totalCount": 2,
+        "pageInfo": {"hasNextPage": False, "endCursor": None},
+        "nodes": [
+            {
+                "author": {"login": "alice", "databaseId": 42},
+                "body": "I would like to work on this",
+                "createdAt": claim_ts,
+                "url": "https://github.com/o/r/issues/1#c1",
+            },
+            {
+                "author": {"login": "alice", "databaseId": 99},
+                "body": "Unrelated comment",
+                "createdAt": recent_ts,
+                "url": "https://github.com/o/r/issues/1#c2",
+            },
+        ],
+    }
+    findings2 = _run_with_fake_transport(monkeypatch, _payload(repo_takeover))
+    assert findings2["claimants"][0]["days_since_claimant_activity"] == 20

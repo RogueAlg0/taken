@@ -14,9 +14,12 @@ def ts(days_ago):
     return (NOW - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def make_comment(body, author="volunteer", days_ago=0):
+def make_comment(body, author="volunteer", days_ago=0, author_id=101):
+    user = {"login": author}
+    if author_id is not None:
+        user["id"] = author_id
     return {
-        "user": {"login": author},
+        "user": user,
         "body": body,
         "created_at": ts(days_ago),
         "html_url": "https://github.com/octo/repo/issues/1#issuecomment-1",
@@ -86,16 +89,56 @@ def claimant_hit(author="volunteer", age_days=0, since_activity=0):
 
 def test_claimant_hits_carry_age_labels():
     comments = [
-        make_comment("I'd like to take this on.", days_ago=10),
-        make_comment("Still interested, any update?", author="volunteer", days_ago=2),
+        make_comment("I'd like to take this on.", days_ago=10, author_id=101),
+        make_comment(
+            "Still interested, any update?", author="volunteer", days_ago=2, author_id=101
+        ),
     ]
     hits = find_claimant_hits(comments, now=NOW)
     assert len(hits) == 1
     hit = hits[0]
+    assert hit["author_id"] == 101
     assert hit["age_days"] == 10
     # Clock resets on ANY claimant activity: latest comment was 2 days ago.
     assert hit["days_since_claimant_activity"] == 2
     assert hit["age_label"] == "expressed interest 10 days ago"
+
+
+def test_claimant_silence_clock_tracks_id_across_login_rename():
+    """Same numeric ID under two different logins is one person."""
+    comments = [
+        make_comment("I'd like to take this on.", author="alice", days_ago=20, author_id=42),
+        make_comment("Still working on a patch.", author="alice-new", days_ago=1, author_id=42),
+    ]
+    hits = find_claimant_hits(comments, now=NOW)
+    assert len(hits) == 1
+    assert hits[0]["days_since_claimant_activity"] == 1
+    assert decide(base_findings(claimants=hits))[0] == CAUTION
+
+
+def test_claimant_silence_clock_separates_same_login_different_ids():
+    """One login appearing with two different numeric IDs is two people."""
+    comments = [
+        make_comment("I'd like to take this on.", author="alice", days_ago=20, author_id=42),
+        make_comment("Following up on this thread.", author="alice", days_ago=1, author_id=99),
+    ]
+    hits = find_claimant_hits(comments, now=NOW)
+    assert len(hits) == 1
+    assert hits[0]["days_since_claimant_activity"] == 20
+    assert decide(base_findings(claimants=hits))[0] == GO
+
+
+def test_claimant_without_id_is_unresolvable():
+    """Pre-change records with a login and no ID never match by login."""
+    comments = [
+        make_comment("I'd like to take this on.", author="alice", days_ago=20, author_id=None),
+        make_comment("Ping!", author="alice", days_ago=25, author_id=42),
+    ]
+    hits = find_claimant_hits(comments, now=NOW)
+    assert len(hits) == 1
+    assert hits[0]["author_id"] is None
+    assert hits[0]["days_since_claimant_activity"] is None
+    assert decide(base_findings(claimants=hits))[0] == CAUTION
 
 
 def test_claimant_hit_with_unknown_date_stays_conservative():

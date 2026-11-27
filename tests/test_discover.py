@@ -2,6 +2,7 @@
 
 import base64
 import json
+import zlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -10,22 +11,33 @@ from taken import checks, discover
 from taken.cli import main
 from taken.verdict import TAKEN, decide
 
+_UNSET = object()
+
+
+def _uid(login):
+    return zlib.crc32(login.lower().encode("utf-8")) + 1
+
 
 def search_item(number, days_ago):
     updated = (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {
         "number": number,
         "title": f"issue {number}",
-        "user": {"login": "alice"},
+        "user": {"id": _uid("alice"), "login": "alice"},
         "repository_url": "https://api.github.com/repos/octo/repo",
         "updated_at": updated,
         "html_url": f"https://github.com/octo/repo/issues/{number}",
     }
 
 
-def comment(login, body="looks good, thanks", author_association="MEMBER"):
+def comment(login, body="looks good, thanks", author_association="MEMBER", user_id=_UNSET):
+    user = {"login": login}
+    if user_id is _UNSET:
+        user["id"] = _uid(login)
+    elif user_id is not None:
+        user["id"] = user_id
     return {
-        "user": {"login": login},
+        "user": user,
         "body": body,
         "author_association": author_association,
         "created_at": "2026-09-20T00:00:00Z",
@@ -41,6 +53,9 @@ def make_fake(items, states, comments_map, labels_map=None, contributing=False):
                 "incomplete_results": False,
                 "items": items,
             }
+        if endpoint.startswith("users/"):
+            login = endpoint.split("/", 1)[1]
+            return {"id": _uid(login.lower()), "login": login}
         if "/issues/" in endpoint:
             number = int(endpoint.split("/issues/")[1].split("/")[0])
             if endpoint.endswith("/comments"):
@@ -53,9 +68,9 @@ def make_fake(items, states, comments_map, labels_map=None, contributing=False):
                 "state": "open",
                 "title": f"issue {number}",
                 "labels": labels,
-                "assignees": [{"login": "dk5488"}] if kind == "taken" else [],
+                "assignees": [{"id": _uid("dk5488"), "login": "dk5488"}] if kind == "taken" else [],
                 "comments": len(comments_map.get(number, [])),
-                "user": {"login": "alice"},
+                "user": {"id": _uid("alice"), "login": "alice"},
                 "html_url": f"https://github.com/octo/repo/issues/{number}",
                 "created_at": "2026-01-01T00:00:00Z",
             }
@@ -305,7 +320,7 @@ def test_discover_rejects_a_quoted_language_before_any_search(monkeypatch, capsy
 
 
 def test_maintainer_engaged():
-    issue = {"author": "alice"}
+    issue = {"author": "alice", "author_id": _uid("alice")}
     assert discover.maintainer_engaged(issue, [comment("maintainer-bob")]) is True
     assert discover.maintainer_engaged(issue, [comment("alice")]) is False
     assert discover.maintainer_engaged(issue, [comment("some[bot]")]) is False
@@ -313,7 +328,7 @@ def test_maintainer_engaged():
 
 
 def test_maintainer_engaged_uses_author_association():
-    issue = {"author": "alice"}
+    issue = {"author": "alice", "author_id": _uid("alice")}
     for assoc in ("OWNER", "MEMBER", "COLLABORATOR"):
         assert (
             discover.maintainer_engaged(issue, [comment("pat", author_association=assoc)]) is True
@@ -325,15 +340,53 @@ def test_maintainer_engaged_uses_author_association():
 
 
 def test_maintainer_engaged_ignores_me():
-    issue = {"author": "alice"}
-    mine = [comment("me", author_association="MEMBER")]
-    assert discover.maintainer_engaged(issue, mine, me="me") is False
+    issue = {"author": "alice", "author_id": _uid("alice")}
+    mine = [comment("me", author_association="MEMBER", user_id=777)]
+    assert discover.maintainer_engaged(issue, mine, me=777) is False
     assert discover.maintainer_engaged(issue, mine) is True
     assert (
         discover.maintainer_engaged(
-            issue, mine + [comment("owner-amy", author_association="OWNER")], me="me"
+            issue, mine + [comment("owner-amy", author_association="OWNER")], me=777
         )
         is True
+    )
+
+
+def test_maintainer_engaged_tracks_ids_across_rename_and_rejects_unresolvable():
+    issue = {"author": "alice", "author_id": 101}
+    # Same ID as issue author under a new login is one person (author does not count).
+    assert (
+        discover.maintainer_engaged(
+            issue, [comment("alice-renamed", author_association="MEMBER", user_id=101)]
+        )
+        is False
+    )
+    # Different ID even with the author's login is two people (maintainer counts).
+    assert (
+        discover.maintainer_engaged(
+            issue, [comment("alice", author_association="MEMBER", user_id=202)]
+        )
+        is True
+    )
+    # Same numeric --me ID under a new login is still skipped.
+    assert (
+        discover.maintainer_engaged(
+            issue, [comment("new-me", author_association="MEMBER", user_id=777)], me=777
+        )
+        is False
+    )
+    # Pre-change issue or comment without numeric ID is unresolvable.
+    assert (
+        discover.maintainer_engaged(
+            {"author": "alice"}, [comment("pat", author_association="OWNER", user_id=202)]
+        )
+        is False
+    )
+    assert (
+        discover.maintainer_engaged(
+            issue, [comment("pat", author_association="OWNER", user_id=None)]
+        )
+        is False
     )
 
 
@@ -517,11 +570,11 @@ def test_discover_cli_rejects_negative_limit(capsys):
 
 
 def test_maintainer_engaged_ignores_me_case_insensitively():
-    issue = {"author": "alice"}
-    mine = [comment("RogueAlg0", author_association="MEMBER")]
-    assert discover.maintainer_engaged(issue, mine, me="roguealg0") is False
-    assert discover.maintainer_engaged(issue, mine, me="ROGUEALG0") is False
-    assert discover.maintainer_engaged(issue, mine, me="someone-else") is True
+    issue = {"author": "alice", "author_id": _uid("alice")}
+    mine = [comment("RogueAlg0", author_association="MEMBER", user_id=42)]
+    assert discover.maintainer_engaged(issue, mine, me=42) is False
+    assert discover.maintainer_engaged(issue, mine, me="42") is False
+    assert discover.maintainer_engaged(issue, mine, me=99) is True
 
 
 def test_discover_me_comment_case_insensitive(monkeypatch, capsys):

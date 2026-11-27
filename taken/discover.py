@@ -8,6 +8,7 @@ anywhere. No aggregator filters on that.
 """
 
 import concurrent.futures
+import dataclasses
 import random
 from collections import deque
 from collections.abc import Callable
@@ -231,18 +232,23 @@ def maintainer_engaged(issue, comments, me=None):
     A maintainer reply is the strongest cheap signal that volunteering on
     the issue will get a response. Only OWNER/MEMBER/COLLABORATOR
     author_associations count; bots and the issue author never do, and
-    neither does your own login (see --me).
+    neither does your own numeric user ID (see --me).
     """
-    author = issue.get("author")
-    me_lower = (me or "").lower()
+    issue_author_id = issue.get("author_id")
+    if issue_author_id is None and issue.get("author"):
+        # Pre-change/unresolvable issue record without a numeric author ID:
+        # fail closed rather than guessing author identity from login.
+        return False
+    me_id = checks._parse_me_id(me)
     for comment in comments:
-        login = (comment.get("user") or {}).get("login") or ""
-        if not login or login == author or login.endswith("[bot]"):
+        user = comment.get("user") or {}
+        login = user.get("login") or ""
+        commenter_id = checks._user_id(user)
+        if not login or commenter_id is None or login.endswith("[bot]"):
             continue
-        # GitHub logins are case-insensitive: "RogueAlg0" is me even when
-        # --me was passed as "roguealg0". Matches the claimant-scan
-        # convention in checks.py.
-        if me_lower and login.lower() == me_lower:
+        if issue_author_id is not None and commenter_id == issue_author_id:
+            continue
+        if me_id is not None and commenter_id == me_id:
             continue
         if comment.get("author_association") in MAINTAINER_ASSOCIATIONS:
             return True
@@ -761,7 +767,12 @@ def discover(options=None):
     if options.on_budget_warning is not None and candidates:
         for message in budget_warnings(checks.rate_limit_snapshot(), candidates, options.mode):
             options.on_budget_warning(message)
-    verifier = _RollingVerifier(candidates, options, limit)
+    resolved_options = (
+        dataclasses.replace(options, me=checks.resolve_me_id(options.me))
+        if options.me is not None and candidates
+        else options
+    )
+    verifier = _RollingVerifier(candidates, resolved_options, limit)
     ranked, errors, verified = verifier.run()
     # Score desc, then recency desc: the freshest candidate wins ties.
     # (A single sort; the old double-sort accidentally left equal scores

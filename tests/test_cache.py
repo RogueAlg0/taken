@@ -19,8 +19,9 @@ class Proc:
 def cache_env(monkeypatch, tmp_path):
     monkeypatch.setenv("TAKEN_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setattr(checks, "_CACHE_ENABLED", True)
-    # Pre-seed the memoized identity so these tests don't pay for a lookup.
-    monkeypatch.setattr(checks, "_IDENTITY", "octocat")
+    # Pre-seed the memoized numeric user ID so these tests don't pay for a lookup.
+    monkeypatch.setattr(checks, "_IDENTITY", 583231)
+    monkeypatch.setattr(checks, "_IDENTITY_LOGIN", "octocat")
     monkeypatch.setattr(checks, "_IDENTITY_FETCHED", True)
     checks._MEM_CACHE.clear()
 
@@ -374,16 +375,17 @@ def test_cache_misses_after_identity_switch(monkeypatch, tmp_path):
     monkeypatch.setattr(checks, "_CACHE_ENABLED", True)
     monkeypatch.setattr(checks, "_IDENTITY_FETCHED", False)
     monkeypatch.setattr(checks, "_IDENTITY", None)
+    monkeypatch.setattr(checks, "_IDENTITY_LOGIN", None)
     checks._MEM_CACHE.clear()
 
-    logins = ["alice"]
+    users = [{"id": 101, "login": "alice"}]
     calls = []
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
         if cmd[:3] == ["gh", "api", "user"]:
-            return Proc(logins[0] + "\n")
-        return Proc(json.dumps({"who": logins[0], "n": len(calls)}))
+            return Proc(json.dumps(users[0]))
+        return Proc(json.dumps({"who": users[0]["login"], "n": len(calls)}))
 
     monkeypatch.setattr(checks.subprocess, "run", fake_run)
 
@@ -392,14 +394,125 @@ def test_cache_misses_after_identity_switch(monkeypatch, tmp_path):
     assert checks.gh_api("repos/octo/repo") == first  # cache hit, same identity
 
     # Simulate a fresh process after `gh auth switch`, sharing the disk cache.
-    logins[0] = "bob"
+    users[0] = {"id": 202, "login": "bob"}
     monkeypatch.setattr(checks, "_IDENTITY_FETCHED", False)
     monkeypatch.setattr(checks, "_IDENTITY", None)
+    monkeypatch.setattr(checks, "_IDENTITY_LOGIN", None)
     checks._MEM_CACHE.clear()
 
     third = checks.gh_api("repos/octo/repo")
     assert third["who"] == "bob"  # miss: refetched, never alice's data
     assert third != first
+
+
+def test_cache_hits_when_same_id_renames_login(monkeypatch, tmp_path):
+    """Same numeric user ID under two different logins shares cache (one person)."""
+    monkeypatch.setenv("TAKEN_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(checks, "_CACHE_ENABLED", True)
+    monkeypatch.setattr(checks, "_IDENTITY_FETCHED", False)
+    monkeypatch.setattr(checks, "_IDENTITY", None)
+    monkeypatch.setattr(checks, "_IDENTITY_LOGIN", None)
+    checks._MEM_CACHE.clear()
+
+    users = [{"id": 101, "login": "alice"}]
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "api", "user"]:
+            return Proc(json.dumps(users[0]))
+        return Proc(json.dumps({"who": users[0]["login"], "n": len(calls)}))
+
+    monkeypatch.setattr(checks.subprocess, "run", fake_run)
+
+    first = checks.gh_api("repos/octo/repo")
+    assert first == {"who": "alice", "n": 2}
+
+    # Same user renames their login from alice -> alice-renamed; fresh process.
+    users[0] = {"id": 101, "login": "alice-renamed"}
+    monkeypatch.setattr(checks, "_IDENTITY_FETCHED", False)
+    monkeypatch.setattr(checks, "_IDENTITY", None)
+    monkeypatch.setattr(checks, "_IDENTITY_LOGIN", None)
+    checks._MEM_CACHE.clear()
+
+    second = checks.gh_api("repos/octo/repo")
+    assert second == first  # hit: same numeric ID
+
+
+def test_cache_misses_when_same_login_has_different_ids(monkeypatch, tmp_path):
+    """Same login with two different numeric IDs is two people (cache miss)."""
+    monkeypatch.setenv("TAKEN_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(checks, "_CACHE_ENABLED", True)
+    monkeypatch.setattr(checks, "_IDENTITY_FETCHED", False)
+    monkeypatch.setattr(checks, "_IDENTITY", None)
+    monkeypatch.setattr(checks, "_IDENTITY_LOGIN", None)
+    checks._MEM_CACHE.clear()
+
+    users = [{"id": 101, "login": "alice"}]
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "api", "user"]:
+            return Proc(json.dumps(users[0]))
+        return Proc(json.dumps({"id": users[0]["id"], "n": len(calls)}))
+
+    monkeypatch.setattr(checks.subprocess, "run", fake_run)
+
+    first = checks.gh_api("repos/octo/repo")
+    assert first == {"id": 101, "n": 2}
+
+    # Another user later registers the old login "alice" under ID 202.
+    users[0] = {"id": 202, "login": "alice"}
+    monkeypatch.setattr(checks, "_IDENTITY_FETCHED", False)
+    monkeypatch.setattr(checks, "_IDENTITY", None)
+    monkeypatch.setattr(checks, "_IDENTITY_LOGIN", None)
+    checks._MEM_CACHE.clear()
+
+    second = checks.gh_api("repos/octo/repo")
+    assert second != first
+    assert second["id"] == 202
+
+
+def test_cache_treats_login_only_identity_and_legacy_entries_as_unresolvable(monkeypatch, tmp_path):
+    """Login-only identities and pre-change login-keyed entries never resolve or match."""
+    monkeypatch.setenv("TAKEN_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(checks, "_CACHE_ENABLED", True)
+    monkeypatch.setattr(checks, "_IDENTITY_FETCHED", False)
+    monkeypatch.setattr(checks, "_IDENTITY", None)
+    monkeypatch.setattr(checks, "_IDENTITY_LOGIN", None)
+    checks._MEM_CACHE.clear()
+
+    # Pre-change login-keyed disk entry (even if login was numeric string "101").
+    legacy_key = "github-user:101|repos/octo/repo"
+    legacy_path = checks._cache_file(legacy_key)
+    import os
+    import time
+
+    os.makedirs(os.path.dirname(legacy_path), exist_ok=True)
+    with open(legacy_path, "w", encoding="utf-8") as fh:
+        json.dump({"fetched_at": time.time(), "data": {"stale_legacy": True}, "etag": None}, fh)
+
+    calls = []
+
+    def fake_run_no_id(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "api", "user"]:
+            return Proc(json.dumps({"login": "alice"}))  # no numeric ID
+        return Proc(json.dumps({"fresh": len(calls)}))
+
+    monkeypatch.setattr(checks.subprocess, "run", fake_run_no_id)
+    assert checks.gh_api("repos/octo/repo") == {"fresh": 2}
+    assert checks.gh_api("repos/octo/repo") == {"fresh": 3}  # no caching without ID
+
+    # Even directly seeding a string login in _IDENTITY must fail closed.
+    monkeypatch.setattr(checks, "_IDENTITY", "101")
+    monkeypatch.setattr(checks, "_IDENTITY_FETCHED", True)
+    assert checks._namespaced_key("repos/octo/repo") is None
+
+    # Valid numeric ID 101 must never hit the legacy "github-user:101|..." file.
+    monkeypatch.setattr(checks, "_IDENTITY", 101)
+    assert checks.gh_api("repos/octo/repo") == {"fresh": 4}
 
 
 def test_cache_skipped_when_identity_unknown(monkeypatch, tmp_path):
@@ -443,7 +556,7 @@ def test_identity_lookup_memoized(monkeypatch, tmp_path):
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
         if cmd[:3] == ["gh", "api", "user"]:
-            return Proc("OctoCat\n")
+            return Proc(json.dumps({"id": 583231, "login": "OctoCat"}))
         return Proc(json.dumps({"ok": True}))
 
     monkeypatch.setattr(checks.subprocess, "run", fake_run)

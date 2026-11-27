@@ -337,6 +337,7 @@ def scan_repo(
     effective_parameters = {"limit": limit, "label": label, "me": me, "thresholds": thresholds}
     try:
         issues = checks.list_open_issues(owner, repo, limit=limit, label=label)
+        me_id = checks.resolve_me_id(me) if (me is not None and issues) else None
     except (checks.TakenError, subprocess.TimeoutExpired) as exc:
         return {
             "target": f"{owner}/{repo}",
@@ -361,7 +362,7 @@ def scan_repo(
                 owner,
                 repo,
                 item["number"],
-                me=me,
+                me=me_id,
                 mode=mode,
                 payload=item,
                 thresholds=thresholds,

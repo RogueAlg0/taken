@@ -220,7 +220,10 @@ def build_parser():
         "--me",
         metavar="LOGIN",
         default=None,
-        help="your GitHub login; your own comments are ignored in the claimant scan.",
+        help=(
+            "your GitHub login or numeric user ID; your own comments are ignored in the "
+            "claimant scan."
+        ),
     )
     parser.add_argument(
         "--no-cache",
@@ -879,6 +882,13 @@ def _run_batch_jobs(jobs, args, mode):
     """
     results = []
     failed = False
+    me = args.me
+    if me is not None:
+        try:
+            me = checks.resolve_me_id(me)
+        except checks.TakenError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return results, True
     workers = budget.current().batch_workers
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [
@@ -887,7 +897,7 @@ def _run_batch_jobs(jobs, args, mode):
                 owner,
                 repo,
                 number,
-                args.me,
+                me,
                 mode,
                 payload,
                 _thresholds_from_args(args),

@@ -39,7 +39,7 @@ def make_health_fake():
         if endpoint == "repos/o/r/pulls":
             return [{"merged_at": _recent_timestamp()}]
         if endpoint == "repos/o/r/commits":
-            return [{"author": {"login": "alice"}, "commit": {"author": {}}}]
+            return [{"author": {"id": 101, "login": "alice"}, "commit": {"author": {}}}]
         if "/contents/" in endpoint:
             raise NotFoundError(endpoint)
         if endpoint == "repos/o/r/issues/1/comments":

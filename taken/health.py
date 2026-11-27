@@ -58,6 +58,7 @@ class WaitingClaim:
     claim_date: str  # YYYY-MM-DD
     age_days: int
     snippet: str
+    claimant_id: int | None = None
 
 
 @dataclass
@@ -69,6 +70,8 @@ class QuietClaim:
     maintainer: str
     reply_date: str  # YYYY-MM-DD
     quiet_days: int
+    claimant_id: int | None = None
+    maintainer_id: int | None = None
 
 
 @dataclass
@@ -80,6 +83,7 @@ class StalePR:
     idle_days: int
     band: str
     draft: bool
+    author_id: int | None = None
 
 
 @dataclass
@@ -131,7 +135,7 @@ class RepoHealth:
 
 
 def _comment_events(comments):
-    """Normalize raw comments to (timestamp, author, association, body) dicts.
+    """Normalize raw comments to (timestamp, author, author_id, association, body) dicts.
 
     Comments without a parseable timestamp or author carry no ordering
     information and are dropped.
@@ -139,13 +143,15 @@ def _comment_events(comments):
     events = []
     for comment in comments or []:
         ts = checks._parse_ts(comment.get("created_at"))
-        author = (comment.get("user") or {}).get("login") or ""
+        user = comment.get("user") or {}
+        author = user.get("login") or ""
         if ts is None or not author:
             continue
         events.append(
             {
                 "ts": ts,
                 "author": author,
+                "author_id": checks._user_id(user),
                 "association": comment.get("author_association") or "NONE",
                 "body": comment.get("body") or "",
                 "bot": author.endswith("[bot]"),
@@ -159,28 +165,37 @@ def _is_maintainer(event):
 
 
 def _claim_events(events, me=None):
-    """Latest claim comment per claimant, keyed by lowercase login."""
-    me_lower = (me or "").lower()
+    """Latest claim comment per claimant, keyed by numeric user ID.
+
+    Comments without a numeric user ID are unresolvable and never grouped
+    or matched by login.
+    """
+    me_id = checks._parse_me_id(me)
     claims = {}
     for event in events:
-        if me_lower and event["author"].lower() == me_lower:
+        author_id = event.get("author_id")
+        if author_id is None:
+            continue
+        if me_id is not None and author_id == me_id:
             continue
         lowered = event["body"].lower()
         matched = next((p for p in checks.CLAIMANT_PATTERNS if p in lowered), None)
         if matched is None:
             continue
-        key = event["author"].lower()
-        if key not in claims or event["ts"] > claims[key]["ts"]:
-            claims[key] = {"ts": event["ts"], "event": event}
+        if author_id not in claims or event["ts"] > claims[author_id]["ts"]:
+            claims[author_id] = {"ts": event["ts"], "event": event}
     return claims
 
 
-def _maintainer_replies(events, key, claim_ts):
+def _maintainer_replies(events, claimant_id, claim_ts):
     """Maintainer replies to one claim, excluding the claimant themself."""
     return [
         ev
         for ev in events
-        if ev["ts"] > claim_ts and _is_maintainer(ev) and ev["author"].lower() != key
+        if ev["ts"] > claim_ts
+        and _is_maintainer(ev)
+        and ev.get("author_id") is not None
+        and ev["author_id"] != claimant_id
     ]
 
 
@@ -198,12 +213,13 @@ def _waiting_entry(number, title, url, event, claim_ts, now, wait_days):
         claim_date=claim_ts.strftime("%Y-%m-%d"),
         age_days=age_days,
         snippet=snippet,
+        claimant_id=event.get("author_id"),
     )
 
 
-def _quiet_entry(number, title, url, claimant, key, events, reply, now, wait_days):
+def _quiet_entry(number, title, url, claimant, claimant_id, events, reply, now, wait_days):
     """A QuietClaim when the claimant went silent after a maintainer reply."""
-    answered = any(ev["ts"] > reply["ts"] and ev["author"].lower() == key for ev in events)
+    answered = any(ev["ts"] > reply["ts"] and ev.get("author_id") == claimant_id for ev in events)
     quiet_days = max(0, (now - reply["ts"]).days)
     if answered or quiet_days < wait_days:
         return None
@@ -215,6 +231,8 @@ def _quiet_entry(number, title, url, claimant, key, events, reply, now, wait_day
         maintainer=reply["author"],
         reply_date=reply["ts"].strftime("%Y-%m-%d"),
         quiet_days=quiet_days,
+        claimant_id=claimant_id,
+        maintainer_id=reply.get("author_id"),
     )
 
 
@@ -231,11 +249,11 @@ def _scan_issue_claims(item, events, options, me, now):
     number = item["number"]
     title = item.get("title") or ""
     url = item.get("html_url") or ""
-    for key, claim in _claim_events(events, me=me).items():
+    for claimant_id, claim in _claim_events(events, me=me).items():
         event = claim["event"]
         if event["association"] in MAINTAINER_ASSOCIATIONS:
             continue
-        replies = _maintainer_replies(events, key, claim["ts"])
+        replies = _maintainer_replies(events, claimant_id, claim["ts"])
         if not replies:
             entry = _waiting_entry(
                 number,
@@ -255,7 +273,7 @@ def _scan_issue_claims(item, events, options, me, now):
                 title,
                 url,
                 event["author"],
-                key,
+                claimant_id,
                 events,
                 reply,
                 now,
@@ -288,15 +306,17 @@ def _scan_prs(owner, repo, options, now):
         idle_days = checks.days_since(pr.get("updated_at"), now)
         if idle_days is None or idle_days < options.pr_stale_days:
             continue
+        user = pr.get("user") or {}
         stale.append(
             StalePR(
                 number=pr.get("number"),
                 title=pr.get("title") or "",
                 url=pr.get("html_url") or "",
-                author=(pr.get("user") or {}).get("login") or "",
+                author=user.get("login") or "",
                 idle_days=idle_days,
                 band=_pr_band(idle_days),
                 draft=bool(pr.get("draft")),
+                author_id=checks._user_id(user),
             )
         )
     return stale, truncated
@@ -387,6 +407,8 @@ def repo_health(owner, repo, options=None, me=None, now=None):
     if truncated:
         issues = issues[:issue_limit]
     report = RepoHealth(owner=owner, repo=repo, truncated=truncated)
+    me_id = None
+    me_resolved = me is None
     for item in issues:
         number = item["number"]
         if not item.get("comments"):
@@ -406,7 +428,10 @@ def repo_health(owner, repo, options=None, me=None, now=None):
                 report.comment_fetch_errors.append(number)
                 continue
             events = _comment_events(comments)
-        waiting, quiet = _scan_issue_claims(item, events, options, me, now)
+            if not me_resolved and events:
+                me_id = checks.resolve_me_id(me)
+                me_resolved = True
+        waiting, quiet = _scan_issue_claims(item, events, options, me_id, now)
         report.waiting_claims.extend(waiting)
         report.quiet_claims.extend(quiet)
         untriaged = _scan_untriaged(item, events, now)

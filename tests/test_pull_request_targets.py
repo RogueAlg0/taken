@@ -16,7 +16,7 @@ def issue():
         "labels": [],
         "assignees": [],
         "comments": 0,
-        "user": {"login": "alice"},
+        "user": {"id": 101, "login": "alice"},
         "html_url": "https://github.com/octo/repo/issues/123",
         "created_at": "2026-01-01T00:00:00Z",
     }
@@ -81,8 +81,10 @@ def test_real_issue_still_returns_facts(monkeypatch, issue, source):
         "title": issue["title"],
         "labels": [],
         "assignees": [],
+        "assignee_ids": [],
         "comment_count": 0,
         "author": "alice",
+        "author_id": 101,
         "url": issue["html_url"],
         "created_at": issue["created_at"],
     }
