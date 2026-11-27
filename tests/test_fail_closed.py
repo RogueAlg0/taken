@@ -248,9 +248,10 @@ def test_latest_activity_ignores_comments_without_an_author():
         {"user": None, "created_at": "2026-10-03T00:00:00Z"},
         {"user": {"login": ""}, "created_at": "2026-10-03T00:00:00Z"},
         {"user": {}, "created_at": "2026-10-03T00:00:00Z"},
-        {"user": {"login": "Alice"}, "created_at": "2026-10-01T00:00:00Z"},
+        {"user": {"login": "NoId"}, "created_at": "2026-10-03T00:00:00Z"},
+        {"user": {"id": 101, "login": "Alice"}, "created_at": "2026-10-01T00:00:00Z"},
     ]
     latest = checks._latest_activity_by_author(comments)
 
-    assert list(latest) == ["alice"]
-    assert latest["alice"][1] == "Alice"
+    assert list(latest) == [101]
+    assert latest[101][1] == "Alice"

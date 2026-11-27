@@ -61,6 +61,14 @@ GRAPHQL_TIMEOUT = 60
 _RATE_LIMITED_RE = re.compile(r"RATE_LIMITED", re.IGNORECASE)
 
 ISSUE_QUERY = """
+fragment ActorIdentity on Actor {
+  login
+  ... on User { databaseId }
+  ... on Bot { databaseId }
+  ... on Organization { databaseId }
+  ... on Mannequin { databaseId }
+}
+
 query IssueVerdict(
   $owner: String!, $repo: String!, $number: Int!, $since: GitTimestamp,
   $commentsAfter: String, $timelineAfter: String, $historyAfter: String, $prsAfter: String,
@@ -73,8 +81,8 @@ query IssueVerdict(
       title
       url
       createdAt
-      author { login }
-      assignees(first: 20) { nodes { login } }
+      author { ...ActorIdentity }
+      assignees(first: 20) { nodes { login databaseId } }
       labels(first: 100, after: $labelsAfter) {
         totalCount
         pageInfo { hasNextPage endCursor }
@@ -83,7 +91,7 @@ query IssueVerdict(
       comments(first: 100, after: $commentsAfter) {
         totalCount
         pageInfo { hasNextPage endCursor }
-        nodes { author { login } body createdAt url }
+        nodes { author { ...ActorIdentity } body createdAt url }
       }
       timelineItems(first: 100, after: $timelineAfter,
         itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT]) {
@@ -92,12 +100,12 @@ query IssueVerdict(
           __typename
           ... on CrossReferencedEvent {
             source { __typename ... on PullRequest {
-              number title state mergedAt updatedAt url author { login }
+              number title state mergedAt updatedAt url author { ...ActorIdentity }
               repository { nameWithOwner } } }
           }
           ... on ConnectedEvent {
             source { __typename ... on PullRequest {
-              number title state mergedAt updatedAt url author { login }
+              number title state mergedAt updatedAt url author { ...ActorIdentity }
               repository { nameWithOwner } } }
           }
         }
@@ -117,7 +125,7 @@ query IssueVerdict(
         ... on Commit {
           history(first: 100, after: $historyAfter, since: $since) {
             pageInfo { hasNextPage endCursor }
-            nodes { author { user { login } email } }
+            nodes { author { user { login databaseId } email } }
           }
         }
       }
@@ -586,6 +594,7 @@ def _map_issue(issue_node, number):
     if issue_node is None:
         raise checks.NotFoundError("issue not found")
     author = issue_node.get("author") or {}
+    assignee_nodes = (issue_node.get("assignees") or {}).get("nodes", [])
     comments = issue_node.get("comments") or {}
     labels = issue_node.get("labels") or {}
     return {
@@ -593,9 +602,13 @@ def _map_issue(issue_node, number):
         "state": (issue_node.get("state") or "").lower(),
         "title": issue_node.get("title"),
         "labels": [n.get("name") for n in labels.get("nodes", [])],
-        "assignees": [n.get("login") for n in (issue_node.get("assignees") or {}).get("nodes", [])],
+        "assignees": [n.get("login") for n in assignee_nodes],
+        "assignee_ids": [
+            uid for uid in (checks._user_id(n) for n in assignee_nodes) if uid is not None
+        ],
         "comment_count": comments.get("totalCount", 0),
         "author": author.get("login"),
+        "author_id": checks._user_id(author),
         "url": issue_node.get("url"),
         "created_at": issue_node.get("createdAt"),
         "_comment_nodes": comments.get("nodes", []),
@@ -630,6 +643,7 @@ def _map_linked_prs(timeline_nodes):
                 "state": state,
                 "merged": bool(src.get("mergedAt")),
                 "author": author.get("login"),
+                "author_id": checks._user_id(author),
                 "url": src.get("url"),
                 # Shape parity with the REST path (issue #83): every linked
                 # PR carries its age so decide() can weaken idle ones.
@@ -647,9 +661,13 @@ def _map_comments_to_rest_shape(nodes):
     shaped = []
     for node in nodes or []:
         author = node.get("author") or {}
+        user: dict[str, Any] = {"login": author.get("login") or ""}
+        uid = checks._user_id(author)
+        if uid is not None:
+            user["id"] = uid
         shaped.append(
             {
-                "user": {"login": author.get("login") or ""},
+                "user": user,
                 "body": node.get("body") or "",
                 "created_at": node.get("createdAt") or "",
                 "html_url": node.get("url"),
@@ -705,23 +723,29 @@ def _count_recent_merges(repository, cutoff):
 
 
 def _commit_author_key(commit):
-    """Dedup key for a commit author: login, else email, else None.
+    """Dedup key for a commit author: numeric user ID, else email, else None.
 
     Bot logins return None so automation never counts as a contributor.
+    Linked user objects holding a login without a numeric databaseId are
+    treated as unresolvable rather than keyed by login.
     """
     author = commit.get("author") or {}
-    user = author.get("user") or {}
-    login = user.get("login") or ""
-    if login:
+    user = author.get("user")
+    if isinstance(user, dict):
+        login = user.get("login") or ""
         if login.endswith("[bot]"):
             return None
-        return login.lower()
+        uid = checks._user_id(user)
+        if uid is not None:
+            return ("id", uid)
+        if login:
+            return None
     email = author.get("email") or ""
-    return email.lower() if email else None
+    return ("email", email.lower()) if email else None
 
 
 def _collect_contributors(repository):
-    """Logins/emails of human commit authors on the default branch."""
+    """Dedup keys of human commit authors on the default branch."""
     authors = set()
     history = ((repository.get("defaultBranchRef") or {}).get("target") or {}).get("history") or {}
     for commit in history.get("nodes", []):
@@ -920,11 +944,15 @@ def run_checks_graphql(owner, repo, number, me=None, mode="graphql", session=Non
     repository = _paginate_history(repository, fetch, variables)
     repository = _paginate_merged_prs(repository, fetch, variables)
 
+    me_id = checks.resolve_me_id(me) if (me is not None and comment_nodes) else None
+
     return {
         "target": f"{owner}/{repo}#{number}",
         "issue": issue,
         "linked_prs": _map_linked_prs(timeline_nodes),
-        "claimants": checks.find_claimant_hits(_map_comments_to_rest_shape(comment_nodes), me=me),
+        "claimants": checks.find_claimant_hits(
+            _map_comments_to_rest_shape(comment_nodes), me=me_id
+        ),
         # Parity with checks.run_checks: stale-claim decay settings (issue #83).
         "thresholds": thresholds or checks.default_thresholds(),
         "ai_policy": _map_ai_policy(repository),

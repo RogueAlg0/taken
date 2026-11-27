@@ -89,7 +89,7 @@ def test_verbose_stats_count_real_calls(monkeypatch):
 def test_verbose_stats_count_cache_hits(monkeypatch, tmp_path):
     monkeypatch.setenv("TAKEN_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setattr(checks, "_CACHE_ENABLED", True)
-    monkeypatch.setattr(checks, "_IDENTITY", "octocat")
+    monkeypatch.setattr(checks, "_IDENTITY", 583231)
     monkeypatch.setattr(checks, "_IDENTITY_FETCHED", True)
     checks._MEM_CACHE.clear()
 

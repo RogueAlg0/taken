@@ -227,12 +227,19 @@ MAINTAINER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 def _maintainer_engaged(issue, comments, me=None):
     """A maintainer (OWNER/MEMBER/COLLABORATOR), not the author, bot, or --me, commented."""
-    author = issue.get("author")
+    issue_author_id = issue.get("author_id")
+    if issue_author_id is None and issue.get("author"):
+        return False
+    me_id = checks._parse_me_id(me)
     for comment in comments:
-        login = (comment.get("user") or {}).get("login") or ""
-        if not login or login == author or login.endswith("[bot]"):
+        user = comment.get("user") or {}
+        login = user.get("login") or ""
+        commenter_id = checks._user_id(user)
+        if not login or commenter_id is None or login.endswith("[bot]"):
             continue
-        if me and login.lower() == me.lower():
+        if issue_author_id is not None and commenter_id == issue_author_id:
+            continue
+        if me_id is not None and commenter_id == me_id:
             continue
         if comment.get("author_association") in MAINTAINER_ASSOCIATIONS:
             return True
@@ -300,9 +307,13 @@ def run_discover_web(limit, language, label, min_contributors, me):
         # silent empty success.
         return f"error: live discover failed: {search_errors[0][1]}"
     ranked = []
+    try:
+        me_id = checks.resolve_me_id(me) if (me is not None and candidates) else None
+    except checks.TakenError as exc:
+        return f"error: live discover failed: {exc}"
     for owner, repo, number, updated_at in candidates:
         try:
-            findings = checks.run_checks(owner, repo, number, me=me)
+            findings = checks.run_checks(owner, repo, number, me=me_id)
         except checks.TakenError:
             continue  # fail-closed per issue; keep scanning the rest
         verdict, _reasons = decide(findings)
@@ -315,7 +326,7 @@ def run_discover_web(limit, language, label, min_contributors, me):
             comments, _ = checks.fetch_comments(owner, repo, number)
         except checks.TakenError:
             comments = []
-        engaged = _maintainer_engaged(findings["issue"], comments, me=me)
+        engaged = _maintainer_engaged(findings["issue"], comments, me=me_id)
         points, why = _score_candidate(findings, updated_at, engaged)
         markers = "".join(
             f" [{m}]" for m in checks.friendly_labels(findings) + checks.welcoming_signals(findings)
@@ -365,6 +376,7 @@ def run_repo_scan(owner, repo, limit, label, me):
     """Scan a repo's open issues and recommend the GO ones."""
     try:
         issues = checks.list_open_issues(owner, repo, limit=limit, label=label)
+        me_id = checks.resolve_me_id(me) if (me is not None and issues) else None
     except checks.TakenError as exc:
         return f"error: {owner}/{repo}: {exc}"
     if not issues:
@@ -379,7 +391,7 @@ def run_repo_scan(owner, repo, limit, label, me):
         try:
             # The listing already fetched this issue: reuse it instead of
             # refetching per issue (issue #211).
-            findings = checks.run_checks(owner, repo, number, me=me, payload=item)
+            findings = checks.run_checks(owner, repo, number, me=me_id, payload=item)
         except checks.TakenError as exc:
             lines.append(f"ERROR   {owner}/{repo}#{number}  {exc}")
             continue

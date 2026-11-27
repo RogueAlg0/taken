@@ -111,3 +111,26 @@ def test_no_targets_is_usage_error(capsys):
     with pytest.raises(SystemExit) as exc:
         main([])
     assert exc.value.code == 3
+
+
+def test_batch_resolves_me_once_and_fails_closed_on_error(monkeypatch, capsys):
+    calls = []
+
+    def fake(endpoint, params=None):
+        calls.append(endpoint)
+        if endpoint == "users/alice":
+            return {"id": 42, "login": "alice"}
+        return make_fake({1: "go", 2: "go"})(endpoint, params)
+
+    monkeypatch.setattr(checks, "gh_api", fake)
+    assert main(["octo/repo#1", "octo/repo#2", "--me", "alice"]) == 0
+    assert calls.count("users/alice") == 1
+
+    def boom(endpoint, params=None):
+        if endpoint == "users/alice":
+            raise checks.TakenError("network down")
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(checks, "gh_api", boom)
+    assert main(["octo/repo#1", "octo/repo#2", "--me", "alice"]) == 3
+    assert "network down" in capsys.readouterr().err

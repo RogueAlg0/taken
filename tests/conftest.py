@@ -17,12 +17,16 @@ def _isolate_global_state():
     """
     budget.reset()
     checks._IDENTITY = None
+    checks._IDENTITY_LOGIN = None
     checks._IDENTITY_FETCHED = False
+    checks._IDENTITY_FETCHED_AT = None
     checks._MEM_CACHE.clear()
     checks.reset_api_stats()
     yield
     budget.reset()
     checks._IDENTITY = None
+    checks._IDENTITY_LOGIN = None
     checks._IDENTITY_FETCHED = False
+    checks._IDENTITY_FETCHED_AT = None
     checks._MEM_CACHE.clear()
     checks.reset_api_stats()

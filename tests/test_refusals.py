@@ -115,10 +115,13 @@ def test_empty_target_is_exit_3():
     assert main([""]) == 3
 
 
-def make_comment(author, body):
+def make_comment(author, body, author_id=101):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    user = {"login": author}
+    if author_id is not None:
+        user["id"] = author_id
     return {
-        "user": {"login": author},
+        "user": user,
         "body": body,
         "created_at": now,
         "html_url": "https://github.com/octo/repo/issues/1#issuecomment-1",
@@ -127,10 +130,16 @@ def make_comment(author, body):
 
 def test_me_filter_turns_claimant_thread_into_go(monkeypatch):
     comments = [
-        make_comment("RogueAlg0", "I'd like to take this one on, please."),
-        make_comment("bystander", "Same problem here, any workaround?"),
+        make_comment("RogueAlg0", "I'd like to take this one on, please.", author_id=42),
+        make_comment("bystander", "Same problem here, any workaround?", author_id=77),
     ]
-    monkeypatch.setattr(checks, "gh_api", lambda endpoint, params=None: comments)
+
+    def fake(endpoint, params=None):
+        if endpoint == "users/RogueAlg0":
+            return {"id": 42, "login": "RogueAlg0"}
+        return comments
+
+    monkeypatch.setattr(checks, "gh_api", fake)
 
     hits, _, truncated = checks.check_claimants("octo", "repo", 1, me="RogueAlg0")
     assert hits == []
@@ -140,6 +149,19 @@ def test_me_filter_turns_claimant_thread_into_go(monkeypatch):
     findings["claimants"] = hits
     verdict, _ = decide(findings)
     assert verdict == GO
+
+
+def test_me_filter_by_numeric_id_handles_rename_and_takeover(monkeypatch):
+    comments = [
+        make_comment("RenamedMe", "I'd like to take this one on, please.", author_id=42),
+        make_comment("OldLogin", "I'd like to take this one on, please.", author_id=99),
+    ]
+    monkeypatch.setattr(checks, "gh_api", lambda endpoint, params=None: comments)
+
+    hits, _, _ = checks.check_claimants("octo", "repo", 1, me=42)
+    assert len(hits) == 1
+    assert hits[0]["author"] == "OldLogin"
+    assert hits[0]["author_id"] == 99
 
 
 def test_same_thread_without_me_filter_is_not_go(monkeypatch):

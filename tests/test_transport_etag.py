@@ -16,8 +16,8 @@ from taken import checks, transport
 def cache_env(monkeypatch, tmp_path):
     monkeypatch.setenv("TAKEN_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setattr(checks, "_CACHE_ENABLED", True)
-    # Pre-seed the memoized identity so these tests don't pay for a lookup.
-    monkeypatch.setattr(checks, "_IDENTITY", "octocat")
+    # Pre-seed the memoized numeric user ID so these tests don't pay for a lookup.
+    monkeypatch.setattr(checks, "_IDENTITY", 583231)
     monkeypatch.setattr(checks, "_IDENTITY_FETCHED", True)
     checks._MEM_CACHE.clear()
     checks.reset_api_stats()

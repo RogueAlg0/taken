@@ -68,8 +68,8 @@ options:
                         retries, backoff time, API usage) to stderr at the end
                         of the run; implies --verbose. Only counts, timings,
                         and sizes: never tokens or response bodies.
-  --me LOGIN            your GitHub login; your own comments are ignored in
-                        the claimant scan.
+  --me LOGIN            your GitHub login or numeric user ID; your own
+                        comments are ignored in the claimant scan.
   --no-cache            bypass the API response cache (~/.cache/taken, 1h
                         TTL).
   --clear-cache         delete the API response cache (~/.cache/taken) and

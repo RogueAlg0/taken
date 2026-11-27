@@ -572,6 +572,7 @@ def _cache_key(endpoint, params):
 
 
 _IDENTITY = None
+_IDENTITY_LOGIN = None
 _IDENTITY_FETCHED = False
 _IDENTITY_FETCHED_AT = None
 # Re-resolve the gh identity after this TTL so that a `gh auth switch` in a
@@ -579,16 +580,82 @@ _IDENTITY_FETCHED_AT = None
 # identity's cache namespace for its whole lifetime.
 _IDENTITY_TTL_SECONDS = 30.0
 
+_LOGIN_SAFE_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?(?:\[bot\])?$")
+
+
+def _user_id(user):
+    """Extract a positive integer GitHub user ID from a user dict, or None."""
+    if not isinstance(user, dict):
+        return None
+    for key in ("databaseId", "id"):
+        uid = user.get(key)
+        if isinstance(uid, int) and not isinstance(uid, bool) and uid > 0:
+            return uid
+    return None
+
+
+def _parse_me_id(me):
+    """Extract a numeric user ID from an explicit `--me` value without network I/O."""
+    if isinstance(me, bool) or me is None:
+        return None
+    if isinstance(me, int):
+        return me if me > 0 else None
+    if isinstance(me, str):
+        text = me.strip()
+        if text.isascii() and text.isdigit():
+            uid = int(text)
+            return uid if uid > 0 else None
+        return None
+    if isinstance(me, dict):
+        return _user_id(me)
+    return None
+
+
+def resolve_me_id(me):
+    """Resolve `--me` (numeric user ID or GitHub login) to a numeric user ID.
+
+    Numeric IDs resolve directly without API calls. A login matches the
+    memoized authenticated `gh` identity when available (without triggering
+    a new subprocess probe), otherwise looks up `users/<login>`. Unresolvable
+    or unknown logins return None (fail closed: never guess a match on login).
+    """
+    uid = _parse_me_id(me)
+    if uid is not None:
+        return uid
+    if not isinstance(me, str):
+        return None
+    login = me.strip()
+    if not login or ".." in login or not _LOGIN_SAFE_RE.fullmatch(login):
+        return None
+    if _IDENTITY_FETCHED:
+        now = time.monotonic()
+        if _IDENTITY_FETCHED_AT is None or (now - _IDENTITY_FETCHED_AT) < _IDENTITY_TTL_SECONDS:
+            if (
+                _IDENTITY_LOGIN == login.lower()
+                and isinstance(_IDENTITY, int)
+                and not isinstance(_IDENTITY, bool)
+                and _IDENTITY > 0
+            ):
+                return _IDENTITY
+    endpoint = f"users/{login}"
+    _require_safe_endpoint(endpoint)
+    try:
+        data = _require_dict(gh_api(endpoint), endpoint)
+    except NotFoundError:
+        return None
+    return _user_id(data)
+
 
 def _github_identity():
-    """Return the authenticated `gh` login (lowercased), memoized with a short TTL.
+    """Return the authenticated `gh` numeric user ID, memoized with a short TTL.
 
-    Cache entries are namespaced by identity so that switching identities
-    (`gh auth switch`, or a shared TAKEN_CACHE_DIR on a shared machine)
-    cannot serve one identity's cached data to another. Returns None when
-    the identity cannot be determined; callers fail closed in that case.
+    Cache entries are namespaced by numeric user ID so that account renames
+    keep cache continuity while switching identities (`gh auth switch`, or a
+    shared TAKEN_CACHE_DIR on a shared machine) cannot serve one identity's
+    cached data to another. Returns None when the numeric ID cannot be
+    determined; callers fail closed in that case.
     """
-    global _IDENTITY, _IDENTITY_FETCHED, _IDENTITY_FETCHED_AT
+    global _IDENTITY, _IDENTITY_LOGIN, _IDENTITY_FETCHED, _IDENTITY_FETCHED_AT
     now = time.monotonic()
     if _IDENTITY_FETCHED:
         # A None timestamp (e.g. a seeded/reset state) counts as freshly
@@ -597,30 +664,39 @@ def _github_identity():
             return _IDENTITY
     _IDENTITY_FETCHED = True
     _IDENTITY_FETCHED_AT = now
+    _IDENTITY = None
+    _IDENTITY_LOGIN = None
     try:
         proc = subprocess.run(
-            ["gh", "api", "user", "--jq", ".login"],
+            ["gh", "api", "user"],
             capture_output=True,
             text=True,
             timeout=API_TIMEOUT,
         )
-        login = (proc.stdout or "").strip().lower()
-        _IDENTITY = login if proc.returncode == 0 and login else None
+        if proc.returncode == 0 and proc.stdout:
+            data = json.loads(proc.stdout)
+            uid = _user_id(data)
+            if uid is not None:
+                _IDENTITY = uid
+                login = (data.get("login") or "").strip().lower()
+                _IDENTITY_LOGIN = login or None
     except Exception:
         _IDENTITY = None
+        _IDENTITY_LOGIN = None
     return _IDENTITY
 
 
 def _namespaced_key(key):
-    """Bind a cache key to the authenticated GitHub identity.
+    """Bind a cache key to the authenticated GitHub numeric user ID.
 
-    Returns None when the identity is unknown; the cache then behaves as a
-    permanent miss (fail closed) rather than risk cross-identity leakage.
+    Returns None when the numeric ID is unknown; the cache then behaves as a
+    permanent miss (fail closed) rather than risk cross-identity leakage or
+    matching legacy login-keyed entries.
     """
     identity = _github_identity()
-    if identity is None:
+    if not isinstance(identity, int) or isinstance(identity, bool) or identity <= 0:
         return None
-    return f"github-user:{identity}|{key}"
+    return f"github-user-id:{identity}|{key}"
 
 
 def _mem_get(key):
@@ -1389,6 +1465,25 @@ _ISSUE_PAYLOAD_FIELDS = (
 )
 
 
+def _issue_facts(number, data):
+    """Build the normalized issue dict from a REST issue or search payload."""
+    assignees = data.get("assignees") or []
+    user = data.get("user") or {}
+    return {
+        "number": number,
+        "state": data.get("state"),
+        "title": data.get("title"),
+        "labels": [label["name"] for label in (data.get("labels") or [])],
+        "assignees": [assignee["login"] for assignee in assignees],
+        "assignee_ids": [uid for uid in (_user_id(a) for a in assignees) if uid is not None],
+        "comment_count": data.get("comments", 0),
+        "author": user.get("login"),
+        "author_id": _user_id(user),
+        "url": data.get("html_url"),
+        "created_at": data.get("created_at"),
+    }
+
+
 def _issue_facts_from_payload(payload, number):
     """Build check_issue()'s facts dict from a search/issues item.
 
@@ -1401,17 +1496,7 @@ def _issue_facts_from_payload(payload, number):
     try:
         if any(payload.get(field) is None for field in _ISSUE_PAYLOAD_FIELDS):
             return None
-        return {
-            "number": number,
-            "state": payload["state"],
-            "title": payload["title"],
-            "labels": [label["name"] for label in payload["labels"]],
-            "assignees": [user["login"] for user in payload["assignees"]],
-            "comment_count": payload["comments"],
-            "author": (payload["user"] or {}).get("login"),
-            "url": payload["html_url"],
-            "created_at": payload["created_at"],
-        }
+        return _issue_facts(number, payload)
     except (KeyError, TypeError, AttributeError):
         # Malformed payload: not evidence of anything. The caller falls
         # back to the plain GET.
@@ -1435,17 +1520,7 @@ def check_issue(owner, repo, number, payload=None):
     data = _require_dict(gh_api(endpoint), endpoint)
     if "pull_request" in data:
         raise TakenError(f"{owner}/{repo}#{number} is a pull request, not an issue")
-    return {
-        "number": number,
-        "state": data.get("state"),
-        "title": data.get("title"),
-        "labels": [label["name"] for label in (data.get("labels") or [])],
-        "assignees": [user["login"] for user in (data.get("assignees") or [])],
-        "comment_count": data.get("comments", 0),
-        "author": (data.get("user") or {}).get("login"),
-        "url": data.get("html_url"),
-        "created_at": data.get("created_at"),
-    }
+    return _issue_facts(number, data)
 
 
 def _timeline_event_pr(event, seen):
@@ -1474,12 +1549,14 @@ def _timeline_pr_info(pr_owner, pr_repo, pr_number):
     endpoint = f"repos/{pr_owner}/{pr_repo}/pulls/{pr_number}"
     pr = _require_dict(gh_api(endpoint), endpoint)
     updated_at = pr.get("updated_at")
+    user = pr.get("user") or {}
     pr_info = {
         "number": int(pr_number),
         "title": pr.get("title"),
         "state": pr.get("state"),
         "merged": bool(pr.get("merged_at")),
-        "author": (pr.get("user") or {}).get("login"),
+        "author": user.get("login"),
+        "author_id": _user_id(user),
         "url": pr.get("html_url"),
         "updated_at": updated_at,
         "idle_days": days_since(updated_at),
@@ -1579,29 +1656,33 @@ def check_timeline(owner, repo, number, pr_idle_days=None):
 
 
 def _latest_activity_by_author(comments):
-    """Map each comment author (lowercased login) to (timestamp, display name).
+    """Map each comment author's numeric user ID to (timestamp, display name).
 
     Scans ALL comments: the silence clock resets on any claimant activity,
-    not just claimant-language comments.
+    not just claimant-language comments. Comments without a numeric user ID
+    are unresolvable and never grouped by login.
     """
     latest_activity = {}
     for comment in comments:
-        author = (comment.get("user") or {}).get("login", "") or ""
-        if not author:
+        user = comment.get("user") or {}
+        uid = _user_id(user)
+        if uid is None:
             continue
+        author = user.get("login", "") or ""
         ts = _parse_ts(comment.get("created_at"))
         if ts is None:
             continue
-        key = author.lower()
-        if key not in latest_activity or ts > latest_activity[key][0]:
-            latest_activity[key] = (ts, author)
+        if uid not in latest_activity or ts > latest_activity[uid][0]:
+            latest_activity[uid] = (ts, author)
     return latest_activity
 
 
-def _claimant_hit(comment, me_lower, now, latest_activity):
+def _claimant_hit(comment, me_id, now, latest_activity):
     """Build the hit dict for one comment, or None when it is not a hit."""
-    author = (comment.get("user") or {}).get("login", "")
-    if me_lower and author.lower() == me_lower:
+    user = comment.get("user") or {}
+    author = user.get("login", "")
+    author_id = _user_id(user)
+    if me_id is not None and author_id == me_id:
         return None
     body = comment.get("body") or ""
     lowered = body.lower()
@@ -1611,13 +1692,14 @@ def _claimant_hit(comment, me_lower, now, latest_activity):
     snippet = " ".join(body.split())
     created_at = comment.get("created_at") or ""
     age_days = days_since(created_at, now)
-    latest = latest_activity.get(author.lower())
+    latest = latest_activity.get(author_id) if author_id is not None else None
     if latest is None:
         since_activity = None
     else:
         since_activity = max(0, (now - latest[0]).days)
     return {
         "author": author,
+        "author_id": author_id,
         "date": created_at[:10],
         "pattern": matched,
         "snippet": snippet[:160],
@@ -1629,7 +1711,7 @@ def _claimant_hit(comment, me_lower, now, latest_activity):
 
 
 def find_claimant_hits(comments, me=None, now=None):
-    """Scan comment bodies for claimant language, skipping the given login.
+    """Scan comment bodies for claimant language, skipping the given user ID.
 
     Each hit carries its age in days plus the days since the claimant's
     latest comment of any kind on the issue, so the silence-window rule in
@@ -1643,9 +1725,9 @@ def find_claimant_hits(comments, me=None, now=None):
     # resets on any claimant activity, not just claimant-language comments.
     latest_activity = _latest_activity_by_author(comments)
     hits = []
-    me_lower = (me or "").lower()
+    me_id = _parse_me_id(me)
     for comment in comments:
-        hit = _claimant_hit(comment, me_lower, now, latest_activity)
+        hit = _claimant_hit(comment, me_id, now, latest_activity)
         if hit is not None:
             hits.append(hit)
     return hits
@@ -1670,7 +1752,8 @@ def check_claimants(owner, repo, number, me=None):
     been missed. Callers that only need hits ignore the middle element.
     """
     comments, truncated = fetch_comments(owner, repo, number)
-    hits = find_claimant_hits(comments, me=me)
+    me_id = resolve_me_id(me) if (me is not None and comments) else None
+    hits = find_claimant_hits(comments, me=me_id)
     return hits, comments, truncated
 
 
@@ -1825,17 +1908,24 @@ def list_open_issues(owner, repo, limit=20, label=None):
 def _commit_author_key(commit):
     """Normalized author key for one commit dict, or None when unusable.
 
-    Bots are excluded. Prefers the GitHub login; falls back to the commit
-    email when the commit has no linked GitHub user.
+    Bots are excluded. Keys linked GitHub users on numeric user ID; falls
+    back to the commit email when the commit has no linked GitHub user.
+    Linked user dicts holding a login without a numeric ID are treated as
+    unresolvable rather than keyed by login.
     """
-    login = (commit.get("author") or {}).get("login") or ""
-    if login:
+    author = commit.get("author")
+    if isinstance(author, dict):
+        login = author.get("login") or ""
         if login.endswith("[bot]"):
             return None
-        return login.lower()
+        uid = _user_id(author)
+        if uid is not None:
+            return ("id", uid)
+        if login:
+            return None
     email = ((commit.get("commit") or {}).get("author") or {}).get("email") or ""
     if email:
-        return email.lower()
+        return ("email", email.lower())
     return None
 
 
