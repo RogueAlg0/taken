@@ -195,8 +195,11 @@ def test_api_graphql_connect_error_maps(clean_env, monkeypatch):
 def test_api_graphql_429_maps_to_rate_limited(clean_env, monkeypatch):
     _install_fake_broker(monkeypatch, ["hsurr:test"])
     _install_client(monkeypatch, lambda url, body, headers: _FakeResponse(429, "slow down"))
-    with pytest.raises(transport.TransportRateLimited):
+    with pytest.raises(transport.TransportRateLimited) as exc:
         transport.api_graphql("query { viewer { login } }")
+    # A bare 429 carries no reset time: report it as unknown, not epoch 0.
+    assert exc.value.reset_epoch is None
+    assert "resets at" not in str(exc.value)
 
 
 def test_api_graphql_non_json_maps(clean_env, monkeypatch):
@@ -344,6 +347,25 @@ def test_graphql_via_httpx_maps_transport_errors(clean_env, monkeypatch):
     monkeypatch.setattr(transport, "api_graphql", boom(transport.TransportAuthError("nope")))
     with pytest.raises(checks.TakenError):
         graphql.graphql_via_httpx("query Q { x }", {})
+
+
+def test_graphql_rate_limit_message_omits_unknown_reset(clean_env, monkeypatch):
+    def limited(reset_epoch):
+        def fake(query, variables=None, timeout=60.0):
+            raise transport.TransportRateLimited(reset_epoch)
+
+        return fake
+
+    for unknown in (None, 0):
+        monkeypatch.setattr(transport, "api_graphql", limited(unknown))
+        with pytest.raises(checks.RateLimitError) as exc:
+            graphql._fetch_via_httpx_transport("query Q { x }", {})
+        assert "resets at" not in str(exc.value)
+
+    monkeypatch.setattr(transport, "api_graphql", limited(1893456000))
+    with pytest.raises(checks.RateLimitError) as exc:
+        graphql._fetch_via_httpx_transport("query Q { x }", {})
+    assert "(resets at 1893456000)" in str(exc.value)
 
 
 def test_graphql_via_httpx_retries_rate_limit(clean_env, monkeypatch):

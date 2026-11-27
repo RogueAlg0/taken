@@ -78,8 +78,10 @@ class TransportRateLimited(TransportError):
     """Preemptive backoff: the last response showed an exhausted budget."""
 
     def __init__(self, reset_epoch):
+        # None (or 0) means the reset time is unknown, as on a bare 429.
         self.reset_epoch = reset_epoch
-        super().__init__(f"rate limit budget exhausted; resets at {reset_epoch}")
+        when = f"; resets at {reset_epoch}" if reset_epoch else ""
+        super().__init__(f"rate limit budget exhausted{when}")
 
 
 def use_httpx():
@@ -500,7 +502,7 @@ def api_graphql(query, variables=None, timeout=DEFAULT_TIMEOUT):
             raise TransportAuthError("credential refresh failed for the httpx transport")
         status, text = _single_graphql_post(query, variables, bearer, timeout)
     if status == 429:
-        raise TransportRateLimited(0)
+        raise TransportRateLimited(None)
     if status >= 400:
         raise TransportError(f"GraphQL query failed: HTTP {status}")
     try:

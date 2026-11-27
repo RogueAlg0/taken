@@ -313,9 +313,9 @@ def _fetch_via_httpx_transport(query, variables):
     try:
         _status, payload = transport.api_graphql(query, variables)
     except transport.TransportRateLimited as exc:
+        when = f" (resets at {exc.reset_epoch})" if exc.reset_epoch else ""
         raise checks.RateLimitError(
-            "GitHub GraphQL points budget exhausted "
-            f"(resets at {exc.reset_epoch}). "
+            f"GitHub GraphQL points budget exhausted{when}. "
             "Check `gh api rate_limit` for the reset time. No verdict was recorded."
         ) from exc
     except transport.TransportAuthError as exc:
