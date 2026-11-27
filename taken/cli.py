@@ -562,6 +562,10 @@ def _log_searched(searched):
     print(f"searched: {detail}", file=sys.stderr)
 
 
+def _warn_budget(message):
+    print(f"warning: {message}", file=sys.stderr)
+
+
 def _discover_options(args, bar):
     return discover.DiscoverOptions(
         limit=_effective_limit(args, 20),
@@ -572,6 +576,7 @@ def _discover_options(args, bar):
         jobs=args.jobs,
         on_progress=functools.partial(_update_progress_bar, bar) if bar is not None else None,
         on_searched=_log_searched,
+        on_budget_warning=_warn_budget,
         mode=graphql.fetch_mode(args),
         thresholds=_thresholds_from_args(args),
         allocation=args.allocation,

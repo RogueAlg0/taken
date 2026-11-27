@@ -255,7 +255,7 @@ def _rate_limit_epoch_to_iso(epoch):
 
 
 def rate_limit_snapshot() -> dict[str, Any] | None:
-    """Best-effort GitHub rate-limit state for the --debug report.
+    """Best-effort GitHub rate-limit state for --debug and the discover preflight.
 
     Runs `gh api rate_limit` outside the response cache (caching would freeze
     the numbers) but records the call under the "rate_limit" endpoint so the
@@ -274,6 +274,7 @@ def rate_limit_snapshot() -> dict[str, Any] | None:
         resources = (json.loads(proc.stdout or "{}") or {}).get("resources") or {}
         core = resources.get("core") or {}
         search = resources.get("search") or {}
+        graphql = resources.get("graphql") or {}
         return {
             "core_remaining": core.get("remaining"),
             "core_limit": core.get("limit"),
@@ -281,6 +282,9 @@ def rate_limit_snapshot() -> dict[str, Any] | None:
             "search_remaining": search.get("remaining"),
             "search_limit": search.get("limit"),
             "search_reset": _rate_limit_epoch_to_iso(search.get("reset")),
+            "graphql_remaining": graphql.get("remaining"),
+            "graphql_limit": graphql.get("limit"),
+            "graphql_reset": _rate_limit_epoch_to_iso(graphql.get("reset")),
         }
     except Exception:
         return None

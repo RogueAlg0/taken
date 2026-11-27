@@ -55,6 +55,7 @@ RATE_LIMIT_JSON = json.dumps(
         "resources": {
             "core": {"limit": 5000, "remaining": 4999, "reset": 1790000000},
             "search": {"limit": 30, "remaining": 29, "reset": 1790000060},
+            "graphql": {"limit": 5000, "remaining": 4990, "reset": 1790000120},
         }
     }
 )
@@ -194,5 +195,8 @@ def test_rate_limit_snapshot_parses(monkeypatch):
     assert snap["core_limit"] == 5000
     assert snap["search_remaining"] == 29
     assert snap["core_reset"].startswith("2026-")
+    assert snap["graphql_remaining"] == 4990
+    assert snap["graphql_limit"] == 5000
+    assert snap["graphql_reset"].startswith("2026-")
     data = checks.api_stats_data()
     assert data["calls"] == {"rate_limit": 1}

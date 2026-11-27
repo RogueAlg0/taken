@@ -25,6 +25,18 @@ SEARCH_MAX_PER_PAGE = 100
 # (see taken/budget.py).
 VERIFY_POOL = 40
 DEFAULT_JOBS = 8
+# Rough cold-cache cost of verifying the pool, for the rate-limit preflight
+# (issue #156). From --debug runs of an 80-candidate pool: REST spent about
+# 2 calls per issue (comments, timeline) plus linked-PR lookups, and up to
+# 14 per repo (repo, commit and pull pages, CONTRIBUTING probes), which
+# RepoMemo shares across a repo's candidates. GraphQL spent well under a
+# point per issue, plus one REST comments fetch per GO candidate for the
+# engagement score. These are upper bounds: cached responses cost nothing
+# and early stop (#214) often ends the run before the pool is spent.
+REST_CALLS_PER_CANDIDATE = 3
+REST_CALLS_PER_REPO = 14
+GRAPHQL_POINTS_PER_CANDIDATE = 1
+GRAPHQL_REST_CALLS_PER_CANDIDATE = 1
 
 
 @dataclass
@@ -59,6 +71,10 @@ class DiscoverOptions:
     explore_floor: probability (0..1) that a bandit pick ignores the
         sampled means and chooses uniformly among repos with candidates
         still queued (default 0.15). Clamped to [0, 1].
+    on_budget_warning: called as on_budget_warning(message) before
+        verification starts, once per rate-limit budget that looks too
+        small for the verify pool (issue #156). The run goes ahead either
+        way. discover only fetches `rate_limit` when this is set.
     """
 
     limit: int = 10
@@ -73,6 +89,45 @@ class DiscoverOptions:
     thresholds: dict | None = None
     allocation: str = "bandit"
     explore_floor: float = 0.15
+    on_budget_warning: Callable | None = None
+
+
+def _uses_graphql(mode):
+    """True when verification goes through GraphQL for this fetch mode."""
+    return mode in ("graphql", "persistent")
+
+
+def budget_warnings(snapshot, candidates, mode):
+    """Warn when the rate-limit snapshot looks short for verifying `candidates`.
+
+    `snapshot` is checks.rate_limit_snapshot() (None when unavailable);
+    `candidates` is the verify pool [(owner, repo, number, item)]. Returns
+    one message per budget the estimate does not fit, empty when it fits or
+    the snapshot has no numbers. The estimate is an upper bound (see
+    REST_CALLS_PER_CANDIDATE), so callers warn and let the run go ahead.
+    """
+    snapshot = snapshot or {}
+    count = len(candidates)
+    if _uses_graphql(mode):
+        needs = [
+            ("graphql", count * GRAPHQL_POINTS_PER_CANDIDATE, "GraphQL points"),
+            ("core", count * GRAPHQL_REST_CALLS_PER_CANDIDATE, "REST calls"),
+        ]
+    else:
+        repos = len({(owner, repo) for owner, repo, _, _ in candidates})
+        needed = count * REST_CALLS_PER_CANDIDATE + repos * REST_CALLS_PER_REPO
+        needs = [("core", needed, "REST calls")]
+    warnings = []
+    for bucket, needed, unit in needs:
+        remaining = snapshot.get(f"{bucket}_remaining")
+        if not isinstance(remaining, int) or remaining >= needed:
+            continue
+        reset = snapshot.get(f"{bucket}_reset") or "an unknown time"
+        warnings.append(
+            f"rate limit: verifying {count} candidates may take about {needed} {unit}, "
+            f"{remaining} left until {reset}; continuing, since early stop usually spends less"
+        )
+    return warnings
 
 
 def _verify_pool_size():
@@ -268,7 +323,7 @@ def _verify_candidate(
     available" apart from "the tool is broken".
     """
     try:
-        if mode in ("graphql", "persistent"):
+        if _uses_graphql(mode):
             session = _thread_graphql_session() if mode == "persistent" else None
             # The wrapper falls back to REST per candidate when the GraphQL
             # transport fails, and records the fallback in the findings.
@@ -703,6 +758,9 @@ def discover(options=None):
             search_errors=search_errors,
             truncated=search_limited or total > 0,
         )
+    if options.on_budget_warning is not None and candidates:
+        for message in budget_warnings(checks.rate_limit_snapshot(), candidates, options.mode):
+            options.on_budget_warning(message)
     verifier = _RollingVerifier(candidates, options, limit)
     ranked, errors, verified = verifier.run()
     # Score desc, then recency desc: the freshest candidate wins ties.

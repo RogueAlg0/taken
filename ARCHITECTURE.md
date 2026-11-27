@@ -97,10 +97,13 @@ These are load-bearing. Do not break them without discussion.
 
 1. `build_query` makes one search across beginner-label variants.
 2. `_collect_candidates` pages the search results.
-3. `_verify_candidate` runs the full single-issue pipeline per candidate in
+3. When the caller passes `on_budget_warning` (the CLI does), one
+   `rate_limit` snapshot is checked against `budget_warnings`' rough cost
+   estimate for the pool. A short budget is a warning, never a stop.
+4. `_verify_candidate` runs the full single-issue pipeline per candidate in
    worker threads (this is the expensive part by design: ~4-6 API calls
    each, paced for the search rate limit).
-4. `score_candidate` ranks by maintainer engagement signals; results print
+5. `score_candidate` ranks by maintainer engagement signals; results print
    ranked.
 
 ## Testing

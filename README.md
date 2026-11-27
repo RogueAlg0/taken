@@ -154,6 +154,11 @@ signal no aggregator filters on: maintainer responsiveness.
 Each line explains its own score. Candidates are verified in parallel
 (8 workers by default; `--jobs N` tunes it).
 
+Before verifying, discover checks your rate limit. When the pool may need more
+calls than you have left, it prints a warning to stderr with the estimate, the
+calls left and the reset time, then runs anyway: the estimate is an upper
+bound, and early stop usually spends less.
+
 ## MCP server
 
 `taken` also ships as an MCP server, so coding agents can check issues with a

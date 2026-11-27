@@ -721,3 +721,127 @@ def test_payload_closed_state_verdicts_taken_without_get(monkeypatch):
     verdict, reasons = decide(findings)
     assert verdict == TAKEN
     assert any("closed" in reason for reason in reasons)
+
+
+# --- rate-limit preflight (issue #156) ---
+
+
+def _snapshot(core=5000, graphql=5000):
+    return {
+        "core_remaining": core,
+        "core_limit": 5000,
+        "core_reset": "2026-11-27T05:00:00+00:00",
+        "graphql_remaining": graphql,
+        "graphql_limit": 5000,
+        "graphql_reset": "2026-11-27T05:30:00+00:00",
+    }
+
+
+def _pool(*repos):
+    return [("octo", repo, n, search_item(n, 1)) for n, repo in enumerate(repos, start=1)]
+
+
+def test_short_budget_warns_and_still_verifies(faked, monkeypatch):
+    monkeypatch.setattr(checks, "rate_limit_snapshot", lambda: _snapshot(core=2))
+    warnings = []
+    options = discover.DiscoverOptions(
+        label="good first issue", jobs=1, on_budget_warning=warnings.append
+    )
+    results = discover.discover(options)
+    assert [r["target"] for r in results] == ["octo/repo#1", "octo/repo#3"]
+    assert results.verified == 3  # warned, not stopped
+    # Three issues from one repo: per-issue cost three times, repo cost once.
+    needed = 3 * discover.REST_CALLS_PER_CANDIDATE + discover.REST_CALLS_PER_REPO
+    assert warnings == [
+        f"rate limit: verifying 3 candidates may take about {needed} REST calls, "
+        "2 left until 2026-11-27T05:00:00+00:00; "
+        "continuing, since early stop usually spends less"
+    ]
+
+
+def test_enough_budget_does_not_warn(faked, monkeypatch):
+    monkeypatch.setattr(checks, "rate_limit_snapshot", lambda: _snapshot())
+    warnings = []
+    options = discover.DiscoverOptions(
+        label="good first issue", jobs=1, on_budget_warning=warnings.append
+    )
+    discover.discover(options)
+    assert warnings == []
+
+
+def test_missing_snapshot_runs_as_before(faked, monkeypatch):
+    monkeypatch.setattr(checks, "rate_limit_snapshot", lambda: None)
+    warnings = []
+    options = discover.DiscoverOptions(
+        label="good first issue", jobs=1, on_budget_warning=warnings.append
+    )
+    results = discover.discover(options)
+    assert warnings == []
+    assert len(results) == 2
+
+
+def test_no_snapshot_without_a_warning_callback(faked, monkeypatch):
+    def no_snapshot():
+        raise AssertionError("rate_limit snapshot taken with nobody to warn")
+
+    monkeypatch.setattr(checks, "rate_limit_snapshot", no_snapshot)
+    results = discover.discover(discover.DiscoverOptions(label="good first issue", jobs=1))
+    assert len(results) == 2
+
+
+def test_no_snapshot_when_nothing_will_be_verified(faked, monkeypatch):
+    def no_snapshot():
+        raise AssertionError("rate_limit snapshot taken for a run that verifies nothing")
+
+    monkeypatch.setattr(checks, "rate_limit_snapshot", no_snapshot)
+    options = discover.DiscoverOptions(
+        label="good first issue", limit=0, on_budget_warning=lambda message: None
+    )
+    assert discover.discover(options) == []
+
+
+def test_rest_estimate_counts_each_repo_once():
+    pool = _pool("a", "a", "b")
+    needed = 3 * discover.REST_CALLS_PER_CANDIDATE + 2 * discover.REST_CALLS_PER_REPO
+    assert discover.budget_warnings(_snapshot(core=needed), pool, "rest") == []
+    assert len(discover.budget_warnings(_snapshot(core=needed - 1), pool, "rest")) == 1
+
+
+@pytest.mark.parametrize("mode", ["graphql", "persistent"])
+def test_graphql_modes_check_graphql_points_and_rest_calls(mode):
+    pool = _pool("a", "b", "c")
+    points = 3 * discover.GRAPHQL_POINTS_PER_CANDIDATE
+    assert discover.budget_warnings(_snapshot(graphql=1), pool, mode) == [
+        f"rate limit: verifying 3 candidates may take about {points} GraphQL points, "
+        "1 left until 2026-11-27T05:30:00+00:00; "
+        "continuing, since early stop usually spends less"
+    ]
+    # The GraphQL path still fetches comments over REST for GO candidates.
+    [rest] = discover.budget_warnings(_snapshot(core=0), pool, mode)
+    assert "REST calls, 0 left until 2026-11-27T05:00:00+00:00" in rest
+    # A core budget the REST path would need, but GraphQL does not, is fine.
+    core = 3 * discover.GRAPHQL_REST_CALLS_PER_CANDIDATE
+    assert discover.budget_warnings(_snapshot(core=core), pool, mode) == []
+
+
+def test_rest_mode_ignores_the_graphql_budget():
+    pool = _pool("a")
+    assert discover.budget_warnings(_snapshot(graphql=0), pool, "rest") == []
+    assert len(discover.budget_warnings(_snapshot(core=0), pool, "rest")) == 1
+
+
+def test_snapshot_without_numbers_does_not_warn():
+    pool = _pool("a")
+    assert discover.budget_warnings(None, pool, "rest") == []
+    assert discover.budget_warnings({"core_remaining": None}, pool, "rest") == []
+    assert discover.budget_warnings({}, pool, "graphql") == []
+
+
+def test_cli_prints_budget_warning_to_stderr(faked, monkeypatch, capsys):
+    monkeypatch.setattr(checks, "rate_limit_snapshot", lambda: _snapshot(core=2))
+    assert main(["--discover", "--label", "good first issue", "--rest"]) == 0
+    out = capsys.readouterr()
+    assert len(out.out.strip("\n").splitlines()) == 2  # the run still finished
+    warning = [line for line in out.err.splitlines() if line.startswith("warning: rate limit:")]
+    assert len(warning) == 1
+    assert "2 left until 2026-11-27T05:00:00+00:00" in warning[0]
