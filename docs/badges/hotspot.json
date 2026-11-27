@@ -24,9 +24,9 @@
     },
     {
       "file": "taken/graphql.py",
-      "cc": 221,
-      "commits": 21,
-      "hotspot": 4641
+      "cc": 222,
+      "commits": 22,
+      "hotspot": 4884
     },
     {
       "file": "taken/health.py",
@@ -36,9 +36,9 @@
     },
     {
       "file": "taken/transport.py",
-      "cc": 103,
-      "commits": 5,
-      "hotspot": 515
+      "cc": 105,
+      "commits": 6,
+      "hotspot": 630
     },
     {
       "file": "taken/verdict.py",
